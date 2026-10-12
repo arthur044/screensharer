@@ -29,7 +29,7 @@ A ideia central (um pipeline e transportes trocáveis) está **certa e foi manti
 ## 2. Arquitetura definitiva
 
 ```
-Celular                                PC: backend local (Node/TS)                 PC: navegador (localhost)
+Celular                                PC: backend local (Go, binário)             PC: navegador (localhost)
 ──────────────────────────             ───────────────────────────                 ─────────────────────────
 F1/F2  scrcpy-server (via adb) ─┐
 F3     app Kotlin              ─┼──▶  Source (USB | WifiAdb | App)  ──WebSocket──▶  WebCodecs VideoDecoder (HW)
@@ -39,14 +39,54 @@ F3     app Kotlin              ─┼──▶  Source (USB | WifiAdb | App)  �
       ◀── controle (F1+) ───────┘      • canal de controle ◀───────────────────────  mouse/teclado
 ```
 
-- **Backend: Node.js + TypeScript**. É uma das linguagens que o plano base já cogitava, e o protocolo fica tipado igual no backend e no frontend. Ele faz `spawn` do `adb`, sobe o servidor HTTP/WebSocket e roda o parser. **Python (asyncio + websockets) também serve**, porque o backend não decodifica nada. Escolha a linguagem que a equipe domina melhor.
-- **Frontend: HTML + TypeScript + WebCodecs**. Decodifica por hardware, roda no Chrome e no Edge (que já vem no Windows) e é a **mesma UI para todas as fases**.
-- **Empacotamento** (opcional, quando for distribuir): Tauri ou Electron envolvendo o backend e a página. O núcleo não muda.
+- **Backend: Go**, um binário único por sistema operacional (comparação na seção 2.2). Ele faz `spawn` do `adb`, sobe o servidor HTTP/WebSocket, roda o parser e embute a página web dentro do próprio executável (`go:embed`).
+- **Frontend: HTML + TypeScript + WebCodecs**. É a **mesma UI para todas as fases e para os dois sistemas**.
+- **Janela:** o backend abre o Edge ou o Chrome em **modo app** (`--app=http://127.0.0.1:PORTA`), que mostra uma janela sem barra de endereço. Se nenhum dos dois existir, usa o navegador padrão. Electron só entra se um dia for preciso ter instalador "de app" (seção 2.3).
+
+### 2.1 Linux e Windows: o que muda em cada um
+O núcleo é o mesmo nos dois sistemas: o adb existe para ambos, o Go compila para ambos e a UI é web. As diferenças ficam só nas bordas:
+
+| Item | Windows | Linux |
+|---|---|---|
+| adb | Embutir o `platform-tools` oficial para Windows | Embutir o `platform-tools` para Linux, ou usar o da distro |
+| USB | Às vezes precisa do **driver USB do fabricante** (Samsung, Xiaomi). Google USB Driver para Pixel | Precisa de **regras udev** (`51-android.rules` ou o pacote `android-sdk-platform-tools-common`), senão o aparelho aparece como `no permissions` |
+| Decodificação no navegador | Edge e Chrome: **por hardware** (D3D11), CPU < 5 % | Chrome: **geralmente por software**, porque a aceleração VAAPI vem desligada por padrão na maioria das distros. Custa ~15–30 % de um núcleo em 1080p60, com latência ainda baixa. Firefox (padrão em muitas distros): suporta WebCodecs nas versões atuais |
+| Navegador garantido | Edge já vem instalado | Nenhum garantido: detectar Chrome, Chromium ou Firefox |
+| Firewall (Fase 3) | Firewall do Windows pede permissão para a porta | Em geral liberado; `ufw` e `firewalld` exigem uma regra |
+| Distribuição | `.exe` assinado (instalador ou zip portátil) | **AppImage** ou `.tar.gz`; `.deb` opcional |
+| Wayland/X11 | — | Irrelevante, porque a janela é do navegador |
+
+**Como desenvolver e testar os dois:** programar no Linux; o Go compila para Windows na mesma máquina (`GOOS=windows go build`); o CI do GitHub Actions roda os testes em `ubuntu-latest` e `windows-latest` a cada PR. Os testes com USB de verdade precisam de **uma máquina Windows física** (driver e adb não dá para testar em CI). Reservar meio dia por fase para isso.
+
+### 2.2 Backend: Node/TS é a melhor escolha?
+**Não.** Ele funciona, mas não é a melhor opção para este projeto.
+
+O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o H.264 em pacotes, repassa por WebSocket e grava em MP4. **Qualquer linguagem aguenta isso com folga** (8 Mbps é pouquíssimo). Então o que decide é **distribuir para Windows e Linux sem dor**, a facilidade de manter e o que você já domina.
+
+| Opção | Distribuição Win + Linux | Memória em uso | Facilidade | Pontos fracos |
+|---|---|---|---|---|
+| **Go** (recomendado) | **Binário único de ~10–15 MB sem runtime**, compilado para Windows direto do Linux | ~15–30 MB | Alta: linguagem pequena, concorrência simples (goroutines), biblioteca padrão forte em rede | Linguagem diferente do frontend (os tipos do protocolo ficam definidos em dois lugares) |
+| Node + TS | Exige empacotar o runtime (~50–90 MB) com Node SEA ou pkg, que dá mais trabalho | ~60–100 MB | Alta para quem sabe JS; mesma linguagem do frontend | Empacotamento chato; `node_modules` pesado |
+| Bun ou Deno + TS | `bun build --compile` / `deno compile` geram binário único (~60–100 MB), inclusive para Windows a partir do Linux | ~40–80 MB | Alta, mesmo TS do frontend | Runtimes mais novos, com compatibilidade menos testada no Windows |
+| Python | PyInstaller, que é lento para abrir e **costuma ser marcado como vírus pelo antivírus no Windows** | ~40–80 MB | Muito alta | Distribuição é o ponto fraco; o GIL não chega a importar aqui |
+| Rust | Binário único de ~5–10 MB | ~10–20 MB | Baixa: curva de aprendizado e desenvolvimento mais lento | Exagero para um backend que só repassa dados. Faria sentido só se a decodificação fosse nativa, fora do navegador |
+| C# / .NET 8 | Single-file de ~30–70 MB | ~50–80 MB | Média-alta | Ecossistema mais forte no Windows; no Linux funciona, mas é menos comum |
+
+**Decisão:**
+- **Go**, se você topar aprender ou já souber. O diferencial é o binário único sem runtime para os dois sistemas, que é exatamente a dor deste projeto.
+- **Bun ou Deno + TypeScript**, se preferir ficar só em TypeScript. Resolve a distribuição mantendo uma linguagem só.
+- **Node puro e Python** ficam descartados como produto final por causa da distribuição. Para o spike da Fase 0, qualquer um serve.
+
+### 2.3 Janela: navegador, Electron, Tauri ou Wails?
+| Opção | Windows | Linux | Tamanho | Veredito |
+|---|---|---|---|---|
+| **Navegador em modo app** | Edge (sempre presente) | Chrome ou Firefox (detectar) | 0 MB extra | **MVP** |
+| Electron | Chromium próprio | Chromium próprio, **igual nos dois** | +~100 MB | Se quiser comportamento idêntico garantido |
+| Tauri / Wails | WebView2 (Chromium): ok | **WebKitGTK**: o suporte a WebCodecs depende da versão da distro e é inconsistente | +~5 MB | **Evitar**: o risco no Linux bate exatamente no componente central (o decoder) |
 
 ### Por que WebCodecs no lugar de PyAV/OpenCV
-- Decodifica por hardware (D3D11/VAAPI/VideoToolbox) e entrega um `VideoFrame` direto para a GPU: CPU abaixo de 5 % em 1080p60.
+- Decodifica por hardware onde o sistema permite (D3D11 no Windows; no Linux, veja 2.1) e entrega um `VideoFrame` direto para a GPU.
 - O próprio navegador cuida do vsync, da tela cheia e do redimensionamento.
-- Ponto de atenção: o Firefox só ganhou WebCodecs recentemente. Suportar oficialmente Chrome e Edge.
 
 ---
 
@@ -54,10 +94,11 @@ F3     app Kotlin              ─┼──▶  Source (USB | WifiAdb | App)  �
 
 ### 3.1 Estrutura do repositório
 ```
-/server        backend Node/TS
-  /sources     UsbSource, WifiAdbSource, AppSource, ScreenrecordSource (só para o spike)
+/server        backend Go (um binário; a pasta /web vai embutida via go:embed)
+  /source      UsbSource, WifiAdbSource, AppSource, ScreenrecordSource (só para o spike)
   /protocol    parser H.264, formato dos pacotes, mensagens de controle
-  /record      remux para MP4 (ffmpeg -c copy ou mp4box.js)
+  /record      remux para MP4 sem recodificar (biblioteca de MP4 em Go, ou ffmpeg -c copy)
+  /platform    diferenças por SO: localizar adb e navegador, udev/driver, firewall
 /web           frontend (decoder, renderização, UI, captura de input)
 /android       app Kotlin (Fase 3)
 /vendor        scrcpy-server.jar (versão fixada + NOTICE da licença)
@@ -65,20 +106,21 @@ F3     app Kotlin              ─┼──▶  Source (USB | WifiAdb | App)  �
 ```
 
 ### 3.2 Interface das fontes (substitui `start()` / `read_frame()`)
-```ts
-interface VideoSource {
-  start(cfg: { maxSize: number; fps: number; bitrate: number; codec: 'h264' }): Promise<StreamInfo>;
-  stop(): Promise<void>;
-  packets(): AsyncIterable<EncodedPacket>;      // uma access unit por pacote
-  requestKeyframe(): void;                      // depois de perda, reconexão ou decoder novo
-  setBitrate?(bps: number): void;               // taxa adaptativa
-  control?: ControlChannel;                     // ausente no AppSource
-  on(ev: 'config' | 'disconnected' | 'error', cb: (...a: any[]) => void): void;
+```go
+type VideoSource interface {
+    Start(ctx context.Context, cfg Config) (StreamInfo, error) // Config: MaxSize, FPS, Bitrate, Codec
+    Stop() error
+    Packets() <-chan EncodedPacket   // uma access unit por pacote
+    Events() <-chan Event            // Config (SPS/PPS novos), Disconnected, Error
+    RequestKeyframe()                // depois de perda, reconexão ou decoder novo
 }
-interface EncodedPacket { data: Uint8Array; ptsUs: bigint; keyframe: boolean; }
-interface StreamInfo   { width: number; height: number; codecString: string; /* ex.: avc1.42E01F */ }
+type BitrateSetter interface{ SetBitrate(bps int) } // opcional: taxa adaptativa
+type Controller   interface{ Control() ControlChannel } // opcional: o AppSource não implementa
+
+type EncodedPacket struct { Data []byte; PTSMicros int64; Keyframe bool }
+type StreamInfo    struct { Width, Height int; CodecString string } // ex.: "avc1.42E01F"
 ```
-O evento `config` dispara quando chegam SPS/PPS novos, por exemplo numa rotação. A UI então reconfigura o `VideoDecoder`.
+O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotação. A UI então reconfigura o `VideoDecoder`.
 
 ### 3.3 Regras de desempenho (obrigatórias em todas as fontes)
 1. **Descartar em vez de enfileirar.** Se o WebSocket ou o decoder atrasar, descarta tudo até o próximo keyframe. Atraso acumulado é o pior defeito desse tipo de app.
@@ -143,6 +185,9 @@ O evento `config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 | R10 | Fase 3: o Android 14+ pede consentimento **a cada sessão**, e alguns fabricantes matam o foreground service | A | M | Comportamento do sistema, não tem como evitar. Explicar na UI e pedir para tirar o app da otimização de bateria |
 | R11 | Firewall do Windows bloqueia a porta da Fase 3 | A | B | Regra criada pelo instalador ou instrução na primeira execução |
 | R12 | Aquecimento e bateria em sessões longas | M | M | Cair para 30 fps com a tela parada; perfil econômico |
+| R15 | Linux: sem regra udev o aparelho aparece como `no permissions` | A | M | O AppImage detecta isso e mostra o comando para instalar a regra; documentar o pacote da distro |
+| R16 | Linux: Chrome decodifica por software (sem VAAPI) | A | B | ~15–30 % de um núcleo em 1080p60 é aceitável; perfil 720p para máquinas fracas |
+| R17 | Projeto desenvolvido no Linux e Windows testado pouco | M | A | CI com `windows-latest` + teste manual em Windows físico por fase |
 | R13 | Licenças | B | A | `scrcpy-server` é Apache-2.0 (manter NOTICE). Não usar código GPL (UxPlay, ffmpeg compilado com GPL) dentro do produto |
 | R14 | **Produto:** o scrcpy já faz as Fases 1, 2 e 4 de graça | A | A* | *Só pesa se o objetivo for lançar um produto. Diferenciais: UI sem terminal, pareamento por QR, vários aparelhos e a Fase 3 sem ADB |
 
@@ -158,16 +203,20 @@ O evento `config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 | Aparelhos de teste (2 a 3 usados: Samsung, Xiaomi, Motorola) | ~R$ 1.500–2.500, uma vez (opcional se já tiver) |
 | Google Play (Fase 3) | US$ 25, uma vez (ou distribuir o APK direto, de graça) |
 | Assinatura de código no Windows (só se distribuir o instalador) | ~US$ 10/mês (Azure Trusted Signing) |
+| Linux (AppImage/tar.gz) | R$ 0; não exige assinatura |
+| CI para Linux + Windows (GitHub Actions) | Grátis em repositório público; em privado, a cota grátis costuma bastar (minutos de Windows contam em dobro) |
 | Espelhar pela internet (fora do escopo) | Precisaria de relay TURN: ~US$ 0,20–0,30 por hora por usuário a 8 Mbps |
 
 ### 6.2 Esforço (1 desenvolvedor)
 | Fase | Prazo | Acumulado |
 |---|---|---|
 | 0 Spike | 1–2 dias | ~0,5 semana |
-| 1 USB | 2–3 semanas | ~3 semanas |
-| 2 Wi-Fi ADB | 1 semana | ~4 semanas |
-| 3 App próprio | 5–7 semanas | ~10 semanas |
-| 4 Extras | 1–2 semanas | ~12 semanas |
+| 1 USB (Linux + Windows) | 3–4 semanas | ~4 semanas |
+| 2 Wi-Fi ADB | 1 semana | ~5 semanas |
+| 3 App próprio | 5–7 semanas | ~11 semanas |
+| 4 Extras | 1–2 semanas | ~13 semanas |
+
+Suportar os dois sistemas soma ~1 semana no total (empacotamento, udev, driver, testes no Windows), quase toda na Fase 1. Somar +1–2 semanas se você ainda não souber Go.
 
 ### 6.3 Viabilidade por fase
 | Fase | Técnica | Observação |
@@ -183,13 +232,15 @@ O evento `config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 - **Latência real:** cronômetro em milissegundos na tela do celular, filmando o celular e o monitor juntos com o celular a 240 fps; média de 30 amostras. Repetir em USB, 5 GHz e 2.4 GHz.
 - **Overlay de debug na UI:** fps, bitrate, frames descartados, tamanho da fila e RTT.
 - **Testes de longa duração:** 2 horas de sessão, acompanhando o uso de memória do backend e da aba.
-- **Testes automáticos:** parser H.264 (inclusive fuzzing com dados corrompidos) e protocolo de controle, rodando no CI do GitHub Actions.
+- **Testes automáticos:** parser H.264 (fuzzing nativo do Go, `go test -fuzz`, com dados corrompidos) e protocolo de controle, rodando no CI do GitHub Actions em **Ubuntu e Windows**.
+- **Teste manual em Windows físico** a cada fase: driver USB, adb embutido, Edge em modo app e firewall.
 
 ## 8. Decisões tomadas (definitivo)
 1. Pipeline único com `VideoSource` intercambiável: **mantido** do plano base.
 2. Fonte da Fase 1: **`scrcpy-server`**. O `screenrecord` fica só no spike.
 3. UI e decodificação: **página web local + WebCodecs** em todas as fases, no lugar de PyAV/OpenCV.
-4. Backend: **Node.js + TypeScript** (Python é uma alternativa aceitável).
+4. Backend: **Go**, com binário único para Windows e Linux. Alternativa: **Bun ou Deno + TypeScript** compilados. Node puro e Python ficam só no spike.
+8. Plataformas: **Windows e Linux desde a Fase 1**. Janela = navegador em modo app; Tauri/Wails descartados por causa do WebKitGTK no Linux. Distribuição: `.exe` assinado + AppImage.
 5. Transporte da Fase 3: **WebSocket + TLS fixado por QR**. WebRTC fica descartado enquanto o uso for só em LAN.
 6. Controle remoto e clipboard: **sobem para a Fase 1** no modo ADB. No app próprio, só visualização.
 7. Fase 3 só começa depois de usar as Fases 1 e 2 no dia a dia.
