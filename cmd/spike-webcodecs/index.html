@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8"><title>Spike WebCodecs</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;color:#0f0;font:14px monospace}
+  canvas{width:100%;height:100%;object-fit:contain;display:block}
+  #s{position:fixed;top:8px;left:8px;background:#000a;padding:6px 10px;white-space:pre}
+</style>
+<canvas id="c" width="1280" height="720"></canvas>
+<div id="s">iniciando…</div>
+<script>
+// Duplo clique = tela cheia. Mostra se o navegador decodifica H.264, FPS e tempo de decodificação.
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d'), out = document.getElementById('s');
+canvas.ondblclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+const stats = window.stats = { supported: null, hw: null, decoded: 0, errors: [], avgDecodeMs: 0, fps: 0 };
+const pending = new Map();
+let sum = 0, ts = 0, lastCount = 0;
+setInterval(() => {
+  stats.fps = stats.decoded - lastCount; lastCount = stats.decoded;
+  out.textContent = `H.264 suportado: ${stats.supported}  (hardware preferido: ${stats.hw})\n` +
+    `FPS: ${stats.fps}   decodificação média: ${stats.avgDecodeMs.toFixed(1)} ms\n` +
+    (stats.errors.length ? 'ERRO: ' + stats.errors.at(-1) : 'duplo clique = tela cheia');
+}, 1000);
+const dec = new VideoDecoder({
+  output: f => {
+    const t0 = pending.get(f.timestamp);
+    if (t0 !== undefined) { sum += performance.now() - t0; pending.delete(f.timestamp); }
+    ctx.drawImage(f, 0, 0); f.close();
+    stats.decoded++; stats.avgDecodeMs = sum / stats.decoded;
+  },
+  error: e => stats.errors.push(String(e)),
+});
+const base = { codec: 'avc1.42C01F', optimizeForLatency: true };
+(async () => {
+  const hw = await VideoDecoder.isConfigSupported({ ...base, hardwareAcceleration: 'prefer-hardware' });
+  const any = await VideoDecoder.isConfigSupported(base);
+  stats.hw = hw.supported; stats.supported = any.supported;
+  if (!any.supported) return;
+  dec.configure(base);
+  const ws = new WebSocket('ws://' + location.host + '/ws');
+  ws.binaryType = 'arraybuffer';
+  let first = true;
+  ws.onmessage = m => {
+    const d = new Uint8Array(m.data);
+    let key = false;
+    for (let i = 3; i < Math.min(d.length, 512); i++)
+      if (d[i-3] === 0 && d[i-2] === 0 && d[i-1] === 1 && (d[i] & 31) === 5) { key = true; break; }
+    if (first && !key) return;
+    first = false; ts += 16667; pending.set(ts, performance.now());
+    dec.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: ts, data: d }));
+  };
+})();
+</script>

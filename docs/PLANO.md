@@ -84,6 +84,48 @@ O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o 
 | Electron | Chromium próprio | Chromium próprio, **igual nos dois** | +~100 MB | Se quiser comportamento idêntico garantido |
 | Tauri / Wails | WebView2 (Chromium): ok | **WebKitGTK**: o suporte a WebCodecs depende da versão da distro e é inconsistente | +~5 MB | **Evitar**: o risco no Linux bate exatamente no componente central (o decoder) |
 
+### 2.4 Janela e interface (requisitos do dono do projeto)
+- **Janela própria com tela cheia.** O backend abre o Edge ou o Chrome em modo app (`--app=` + `--user-data-dir` próprio), o que dá uma janela separada, sem abas nem barra de endereço. Para entrar em tela cheia: **F11**, **duplo clique no vídeo** ou um botão; `Esc` sai.
+  - Em tela cheia, a **Keyboard Lock API** (`navigator.keyboard.lock()`, no Chrome e no Edge) deixa enviar ao celular até as teclas que o sistema costuma capturar.
+- **Tela de conexão** (é a primeira tela que aparece):
+  1. **USB:** lista os aparelhos em tempo real (`adb track-devices`) com o estado de cada um (`device`, `unauthorized` → "aceite a depuração no celular", `no permissions` → instrução de udev no Linux). Um botão **Espelhar** em cada aparelho.
+  2. **Wi-Fi:**
+     - Botão **"Ativar Wi-Fi para este aparelho"**: com o celular no USB, liga a depuração sem fio sem precisar digitar código.
+     - Formulário **Parear** (IP:porta + código de 6 dígitos → `adb pair`).
+     - Lista **"Encontrados na rede"** (`adb mdns services`) com o botão **Conectar**.
+  3. Configurações: resolução máxima, FPS, bitrate, ligar ou desligar o controle e o áudio.
+- **Na janela do vídeo:** barra discreta (que some depois de 2 s) com tela cheia, rotação, qualidade, desconectar e o overlay de estatísticas (`Ctrl+Shift+D`).
+
+### 2.5 Viabilidade do Go: verificada na prática
+Foi feito um spike (`cmd/spike-webcodecs`): o Go gera H.264 com o ffmpeg, separa as access units e envia por WebSocket para uma página com WebCodecs. Resultado neste ambiente (Linux na nuvem):
+
+| Item medido | Resultado |
+|---|---|
+| Entrega pelo WebSocket | **60 fps** estáveis a 8,7 Mbps (720p60), pior intervalo entre frames de 22 ms |
+| Memória do servidor Go | **12 MB** (RSS) |
+| Binário Linux / Windows (`CGO_ENABLED=0`, compilado aqui) | 8,6 MB / **5,9 MB** |
+| Dependências | 1 biblioteca pura em Go (`github.com/coder/websocket`); **sem cgo**, então a compilação cruzada para Windows é trivial |
+| Decodificação H.264 no navegador | **Não testável aqui:** o Chromium deste ambiente é um build sem codecs proprietários (`isConfigSupported` → `false`). O **Chrome e o Edge oficiais têm H.264**: confirmar no seu PC (seção 7) |
+
+**Veredito: o Go é viável e é a escolha certa para este desenho.** Tudo que é pesado (decodificar e desenhar o vídeo) fica com o navegador. O Go só faz entrada e saída, que é o ponto forte dele, e não precisa de cgo.
+
+**Onde o Go NÃO seria viável:** fazer a janela e decodificar o vídeo em Go puro. Seria preciso usar FFmpeg e SDL via cgo, que quebra a compilação cruzada simples e exige mingw para gerar o build de Windows. As bibliotecas de interface em Go (Fyne, Gio) não têm decodificador de vídeo. **Por isso a janela é o navegador em modo app.**
+
+**Achado do spike para o Linux:** builds de Chromium **sem codecs proprietários** existem fora deste ambiente também. É o caso de algumas distros (por exemplo, o Chromium do Fedora sem RPM Fusion) e também do Chromium do Playwright. Nesses navegadores o H.264 simplesmente não decodifica. Mitigação:
+1. A detecção de navegador prefere o **Google Chrome ou o Edge** e testa `VideoDecoder.isConfigSupported` antes de começar. Se não houver suporte, mostra uma mensagem clara em vez de tela preta.
+2. **Alternativa futura** (só se aparecer usuário nessa situação): decodificador H.264 em WebAssembly (software, aceitável em 720p).
+
+### 2.6 Como fica o desenvolvimento entre a nuvem e o seu PC
+| Onde | O que faz |
+|---|---|
+| Sessão na nuvem (aqui) | Código, testes unitários, fuzzing do parser, builds de Linux e Windows, CI |
+| Seu PC + Claude Code local | `git pull` → `go run ./cmd/screensharer` com o celular conectado: testes em tempo real, medição de latência, ajustes finos por aparelho |
+
+Para facilitar essa passagem:
+- O único requisito no PC é o **Go 1.24+**. O adb pode ser o do sistema ou um caminho dado por `--adb`. O `scrcpy-server` é baixado na primeira execução **com checagem do SHA-256 fixado no código**: o download do GitHub está bloqueado neste ambiente, mas no seu PC funciona.
+- `--debug` liga logs detalhados e o overlay de estatísticas, para o Claude no seu PC diagnosticar com dados reais.
+- Um `CLAUDE.md` na raiz vai explicar a arquitetura, os comandos e o que testar, para o Claude local continuar sem você precisar repetir o contexto.
+
 ### Por que WebCodecs no lugar de PyAV/OpenCV
 - Decodifica por hardware onde o sistema permite (D3D11 no Windows; no Linux, veja 2.1) e entrega um `VideoFrame` direto para a GPU.
 - O próprio navegador cuida do vsync, da tela cheia e do redimensionamento.
@@ -187,6 +229,7 @@ O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 | R12 | Aquecimento e bateria em sessões longas | M | M | Cair para 30 fps com a tela parada; perfil econômico |
 | R15 | Linux: sem regra udev o aparelho aparece como `no permissions` | A | M | O AppImage detecta isso e mostra o comando para instalar a regra; documentar o pacote da distro |
 | R16 | Linux: Chrome decodifica por software (sem VAAPI) | A | B | ~15–30 % de um núcleo em 1080p60 é aceitável; perfil 720p para máquinas fracas |
+| R18 | Linux: Chromium da distro **sem H.264** (confirmado no spike com um build assim) | M | A | Preferir o Google Chrome ou o Edge; checar `isConfigSupported` e mostrar mensagem clara; decodificador WASM como alternativa futura |
 | R17 | Projeto desenvolvido no Linux e Windows testado pouco | M | A | CI com `windows-latest` + teste manual em Windows físico por fase |
 | R13 | Licenças | B | A | `scrcpy-server` é Apache-2.0 (manter NOTICE). Não usar código GPL (UxPlay, ffmpeg compilado com GPL) dentro do produto |
 | R14 | **Produto:** o scrcpy já faz as Fases 1, 2 e 4 de graça | A | A* | *Só pesa se o objetivo for lançar um produto. Diferenciais: UI sem terminal, pareamento por QR, vários aparelhos e a Fase 3 sem ADB |
@@ -229,6 +272,7 @@ Suportar os dois sistemas soma ~1 semana no total (empacotamento, udev, driver, 
 ---
 
 ## 7. Medição e testes
+- **Primeiro teste no seu PC (spike):** com o ffmpeg no PATH, rodar `go run ./cmd/spike-webcodecs`, abrir `http://127.0.0.1:8090` no Chrome ou no Edge e ver no overlay: "H.264 suportado: true", FPS ~60 e decodificação média (< 5 ms com hardware). Duplo clique testa a tela cheia.
 - **Latência real:** cronômetro em milissegundos na tela do celular, filmando o celular e o monitor juntos com o celular a 240 fps; média de 30 amostras. Repetir em USB, 5 GHz e 2.4 GHz.
 - **Overlay de debug na UI:** fps, bitrate, frames descartados, tamanho da fila e RTT.
 - **Testes de longa duração:** 2 horas de sessão, acompanhando o uso de memória do backend e da aba.
@@ -244,3 +288,4 @@ Suportar os dois sistemas soma ~1 semana no total (empacotamento, udev, driver, 
 6. Controle remoto e clipboard: **sobem para a Fase 1** no modo ADB. No app próprio, só visualização.
 7. Fase 3 só começa depois de usar as Fases 1 e 2 no dia a dia.
 8. Plataformas: **Windows e Linux desde a Fase 1**. Janela = navegador em modo app; Tauri/Wails descartados por causa do WebKitGTK no Linux. Distribuição: `.exe` assinado + AppImage.
+9. Janela: navegador em modo app com tela cheia (F11, duplo clique ou botão) e tela de conexão USB/Wi-Fi como primeira tela (seção 2.4).
