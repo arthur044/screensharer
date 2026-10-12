@@ -199,7 +199,7 @@ O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 | Item | Valor |
 |---|---|
 | Infraestrutura | **R$ 0**. Tudo roda local, sem servidor nem nuvem |
-| Bibliotecas | R$ 0 (adb, scrcpy-server, Node e WebCodecs são gratuitos ou abertos) |
+| Bibliotecas | R$ 0 (adb, scrcpy-server, Go e WebCodecs são gratuitos ou abertos) |
 | Aparelhos de teste (2 a 3 usados: Samsung, Xiaomi, Motorola) | ~R$ 1.500–2.500, uma vez (opcional se já tiver) |
 | Google Play (Fase 3) | US$ 25, uma vez (ou distribuir o APK direto, de graça) |
 | Assinatura de código no Windows (só se distribuir o instalador) | ~US$ 10/mês (Azure Trusted Signing) |
@@ -240,7 +240,7 @@ Suportar os dois sistemas soma ~1 semana no total (empacotamento, udev, driver, 
 2. Fonte da Fase 1: **`scrcpy-server`**. O `screenrecord` fica só no spike.
 3. UI e decodificação: **página web local + WebCodecs** em todas as fases, no lugar de PyAV/OpenCV.
 4. Backend: **Go**, com binário único para Windows e Linux. Alternativa: **Bun ou Deno + TypeScript** compilados. Node puro e Python ficam só no spike.
-8. Plataformas: **Windows e Linux desde a Fase 1**. Janela = navegador em modo app; Tauri/Wails descartados por causa do WebKitGTK no Linux. Distribuição: `.exe` assinado + AppImage.
 5. Transporte da Fase 3: **WebSocket + TLS fixado por QR**. WebRTC fica descartado enquanto o uso for só em LAN.
 6. Controle remoto e clipboard: **sobem para a Fase 1** no modo ADB. No app próprio, só visualização.
 7. Fase 3 só começa depois de usar as Fases 1 e 2 no dia a dia.
+8. Plataformas: **Windows e Linux desde a Fase 1**. Janela = navegador em modo app; Tauri/Wails descartados por causa do WebKitGTK no Linux. Distribuição: `.exe` assinado + AppImage.
