@@ -90,7 +90,7 @@ O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o 
 - **Tela de conexão** (é a primeira tela que aparece):
   1. **USB:** lista os aparelhos em tempo real (`adb track-devices`) com o estado de cada um (`device`, `unauthorized` → "aceite a depuração no celular", `no permissions` → instrução de udev no Linux). Um botão **Espelhar** em cada aparelho.
   2. **Wi-Fi:**
-     - Botão **"Ativar Wi-Fi para este aparelho"**: com o celular no USB, liga a depuração sem fio sem precisar digitar código.
+     - Botão **"Ativar Wi-Fi para este aparelho"**: com o celular no USB, liga a depuração sem fio sem precisar digitar código. Caminho: `adb shell settings put global adb_wifi_enabled 1`, ler o IP e a porta, depois `adb connect`. **A confirmar no aparelho real** se a chave já autorizada pelo USB dispensa o pareamento no TLS. Se não dispensar, o botão cai para o formulário de pareamento. `adb tcpip 5555` continua proibido (R7).
      - Formulário **Parear** (IP:porta + código de 6 dígitos → `adb pair`).
      - Lista **"Encontrados na rede"** (`adb mdns services`) com o botão **Conectar**.
   3. Configurações: resolução máxima, FPS, bitrate, ligar ou desligar o controle e o áudio.
