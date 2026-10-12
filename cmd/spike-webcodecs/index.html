@@ -42,7 +42,7 @@ const base = { codec: 'avc1.42C01F', optimizeForLatency: true };
   ws.onmessage = m => {
     const d = new Uint8Array(m.data);
     let key = false;
-    for (let i = 3; i < Math.min(d.length, 512); i++)
+    for (let i = 3; i < d.length; i++)
       if (d[i-3] === 0 && d[i-2] === 0 && d[i-1] === 1 && (d[i] & 31) === 5) { key = true; break; }
     if (first && !key) return;
     first = false; ts += 16667; pending.set(ts, performance.now());
