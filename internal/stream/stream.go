@@ -235,22 +235,30 @@ func (p *pump) run(onEnd func(error)) {
 }
 
 func (p *pump) handle(e media.Event) {
-	c, hasClient := p.srv.current()
+	// Sessão e configuração são guardadas antes de procurar o cliente. Na ordem
+	// inversa, um cliente que conectasse entre as duas leituras não receberia a
+	// mensagem nem daqui nem do welcome, e ficaria sem decoder. Nesta ordem ele
+	// pode recebê-la duas vezes, o que a interface tolera.
 	switch {
 	case e.Session != nil:
 		p.mu.Lock()
 		p.session = e.Session
 		p.mu.Unlock()
-		if hasClient {
+		if c, ok := p.srv.current(); ok {
 			c.sendJSON(sessionMsg(e.Session))
 		}
+		return
 	case e.Config != nil:
 		p.mu.Lock()
 		p.config = e.Config
 		p.mu.Unlock()
-		if hasClient {
+		if c, ok := p.srv.current(); ok {
 			c.sendJSON(configMsg(e.Config))
 		}
+		return
+	}
+	c, hasClient := p.srv.current()
+	switch {
 	case e.Packet != nil && hasClient:
 		pkt := e.Packet
 		if c.waitKey.Load() {

@@ -13,6 +13,10 @@ const MAX_DECODE_QUEUE = 6;
 // Depois de (re)configurar, o decoder pode demorar para iniciar (no Linux o
 // GStreamer monta o pipeline no primeiro frame). Nesse intervalo não descarta.
 const WARMUP_MS = 1500;
+// Erros seguidos do decoder (sem nenhum frame entre eles) antes de desistir,
+// e a espera antes da primeira nova tentativa.
+const MAX_DECODE_ERRORS = 5;
+const DECODE_RETRY_MS = 200;
 
 export interface MirrorOptions {
   url: string;
@@ -46,6 +50,7 @@ export class Mirror {
   private pending = new Map<number, number>();
   private statsTimer = 0;
   private hideTimer = 0;
+  private retryTimer = 0;
   private lastStats = '';
   private ticks = 0;
 
@@ -84,6 +89,7 @@ export class Mirror {
     this.decoder = null;
     clearInterval(this.statsTimer);
     clearTimeout(this.hideTimer);
+    clearTimeout(this.retryTimer);
     for (const off of this.listeners) off();
     this.listeners = [];
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -132,14 +138,20 @@ export class Mirror {
       error: (e) => {
         this.decodeErrors++;
         console.error('decoder', e);
-        if (this.decodeErrors >= 3 && this.frames === 0) {
-          this.setStatus('Não foi possível decodificar o vídeo.\n' + String(e));
+        if (this.decodeErrors >= MAX_DECODE_ERRORS) {
+          if (this.frames === 0) this.setStatus('Não foi possível decodificar o vídeo.\n' + String(e));
+          else this.end('não foi possível decodificar o vídeo (' + String(e) + ')');
           return;
         }
-        // Recria o decoder e espera o próximo keyframe.
-        this.codec = this.codec || 'avc1.42C01F';
-        this.resetDecoder();
-        this.requestKeyframe();
+        // Recria o decoder e espera o próximo keyframe. A espera dobra a cada
+        // erro seguido: pedir keyframe reinicia o encoder do celular.
+        clearTimeout(this.retryTimer);
+        this.retryTimer = window.setTimeout(() => {
+          if (this.ended) return;
+          this.codec = this.codec || 'avc1.42C01F';
+          this.resetDecoder();
+          this.requestKeyframe();
+        }, DECODE_RETRY_MS * 2 ** (this.decodeErrors - 1));
       },
     });
     // Sem "description": o decoder lê SPS/PPS em Annex B dentro do keyframe.
@@ -186,6 +198,7 @@ export class Mirror {
     frame.close();
     if (this.frames === 0) this.setStatus('');
     this.frames++;
+    this.decodeErrors = 0;
   }
 
   private requestKeyframe() {
@@ -354,7 +367,9 @@ export class Mirror {
       return;
     }
     // Texto comum vai como texto, para respeitar o layout do teclado (ç, acentos…).
-    if (!e.ctrlKey && !e.altKey && !e.metaKey && e.key.length === 1) {
+    // O AltGr chega como Ctrl+Alt no Windows, mas produz um caractere (/, ?, @…).
+    const altGr = e.getModifierState('AltGraph');
+    if ((altGr || (!e.ctrlKey && !e.altKey)) && !e.metaKey && e.key.length === 1) {
       if (action === DOWN) this.send({ t: 'text', s: e.key });
       return;
     }

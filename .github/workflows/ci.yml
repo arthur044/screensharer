@@ -17,7 +17,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Testes Go
-        run: go test ./internal/...
+        run: go test ${{ matrix.os == 'ubuntu-latest' && '-race' || '' }} ./internal/...
 
   build:
     needs: test

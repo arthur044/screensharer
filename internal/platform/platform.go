@@ -25,16 +25,16 @@ func FindADB(explicit string) (string, error) {
 	if p := os.Getenv("ADB"); p != "" {
 		return p, nil
 	}
-	var candidates []string
 	if exe, err := os.Executable(); err == nil {
 		dir := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(dir, Exe("adb")),
-			filepath.Join(dir, "platform-tools", Exe("adb")))
+		if p, ok := firstFile(filepath.Join(dir, Exe("adb")), filepath.Join(dir, "platform-tools", Exe("adb"))); ok {
+			return p, nil
+		}
 	}
 	if p, err := exec.LookPath("adb"); err == nil {
 		return p, nil
 	}
+	var candidates []string
 	for _, env := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
 		if v := os.Getenv(env); v != "" {
 			candidates = append(candidates, filepath.Join(v, "platform-tools", Exe("adb")))
@@ -49,12 +49,20 @@ func FindADB(explicit string) (string, error) {
 	default:
 		candidates = append(candidates, filepath.Join(home, "Android", "Sdk", "platform-tools", "adb"))
 	}
-	for _, c := range candidates {
-		if st, err := os.Stat(c); err == nil && !st.IsDir() {
-			return c, nil
-		}
+	if p, ok := firstFile(candidates...); ok {
+		return p, nil
 	}
 	return "", exec.ErrNotFound
+}
+
+// firstFile devolve o primeiro caminho que existe e não é uma pasta.
+func firstFile(paths ...string) (string, bool) {
+	for _, p := range paths {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, true
+		}
+	}
+	return "", false
 }
 
 // DataDir é a pasta onde o app guarda o scrcpy-server baixado e as configurações.

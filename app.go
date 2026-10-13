@@ -103,14 +103,17 @@ func (a *App) watchDevices() {
 	for {
 		devs, err := a.adb.Devices()
 		if err != nil {
+			// Mantém a última lista: uma falha passageira do adb não deve
+			// fazer os aparelhos sumirem da tela.
 			a.log.Debug("adb devices", "err", err)
-		}
-		a.mu.Lock()
-		changed := !reflect.DeepEqual(devs, a.devices)
-		a.devices = devs
-		a.mu.Unlock()
-		if changed {
-			wruntime.EventsEmit(a.ctx, "devices", devs)
+		} else {
+			a.mu.Lock()
+			changed := !reflect.DeepEqual(devs, a.devices)
+			a.devices = devs
+			a.mu.Unlock()
+			if changed {
+				wruntime.EventsEmit(a.ctx, "devices", devs)
+			}
 		}
 		select {
 		case <-a.ctx.Done():
@@ -164,7 +167,7 @@ func (a *App) needADB() error {
 	return nil
 }
 
-// ListDevices devolve a última lista de aparelhos (atualizada a cada 1,5 s).
+// ListDevices consulta o adb e devolve a lista de aparelhos.
 func (a *App) ListDevices() ([]adb.Device, error) {
 	if err := a.needADB(); err != nil {
 		return nil, err
@@ -305,7 +308,8 @@ func (a *App) handleInput(in media.Input) {
 		err = src.HandleInput(in)
 	}
 	if err != nil {
-		a.log.Debug("entrada", "input", in, "err", err)
+		// Só o tipo: o evento pode trazer texto digitado (senhas).
+		a.log.Debug("entrada", "tipo", in.T, "err", err)
 	}
 }
 
