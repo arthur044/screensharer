@@ -162,7 +162,8 @@ summary { cursor: pointer; color: var(--accent); }
   padding: 4px;
   transition: opacity .25s;
   max-width: calc(100% - 20px);
-  overflow-x: auto;
+  flex-wrap: wrap; /* a janela de um celular em pé é estreita */
+  justify-content: center;
 }
 .toolbar.hidden { opacity: 0; pointer-events: none; }
 .toolbar button {
@@ -173,6 +174,7 @@ summary { cursor: pointer; color: var(--accent); }
   line-height: 1;
   color: var(--text);
 }
+.toolbar button.text { font-size: 12px; }
 .toolbar button:hover { background: var(--border); }
 .toolbar button.danger { color: var(--danger); background: transparent; }
 .toolbar .sep { width: 1px; height: 20px; background: var(--border); margin: 0 2px; }

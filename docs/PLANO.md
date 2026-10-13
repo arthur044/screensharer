@@ -93,15 +93,15 @@ O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o 
 - **Janela própria com tela cheia.** A janela é do Wails, e a tela cheia é **nativa** (`runtime.WindowFullscreen` / `WindowUnfullscreen`). Para entrar: **F11** ou um botão; `Esc` sai. O **duplo clique** só alterna a tela cheia com o controle desligado, porque com controle ele é um toque duplo no celular.
   - Essas teclas são tratadas pelo próprio app, então funcionam igual no WebView2 e no WebKitGTK.
   - As demais teclas vão para o celular quando o controle estiver ligado.
-  - O app lembra o tamanho e a posição da janela.
+  - Durante o espelhamento a janela assume a proporção do celular (ao começar e a cada rotação) e volta ao tamanho anterior ao sair. Quando a proporção não bate (tela cheia), com o celular deitado um botão escolhe entre preencher cortando, mostrar inteira ou esticar. Lembrar o tamanho e a posição entre execuções ainda não foi feito.
 - **Tela de conexão** (é a primeira tela que aparece):
-  1. **USB:** lista os aparelhos em tempo real (`adb track-devices`) com o estado de cada um (`device`, `unauthorized` → "aceite a depuração no celular", `no permissions` → instrução de udev no Linux). Um botão **Espelhar** em cada aparelho.
+  1. **USB:** lista os aparelhos em tempo real (hoje consultando `adb devices` a cada 1,5 s; `adb track-devices` fica como melhoria) com o estado de cada um (`device`, `unauthorized` → "aceite a depuração no celular", `no permissions` → instrução de udev no Linux). Um botão **Espelhar** em cada aparelho.
   2. **Wi-Fi:**
-     - Botão **"Ativar Wi-Fi para este aparelho"**: com o celular no USB, liga a depuração sem fio sem precisar digitar código. Caminho: `adb shell settings put global adb_wifi_enabled 1`, ler o IP e a porta, depois `adb connect`. **A confirmar no aparelho real** se a chave já autorizada pelo USB dispensa o pareamento no TLS. Se não dispensar, o botão cai para o formulário de pareamento. `adb tcpip 5555` continua proibido (R7).
+     - Botão **"Ativar Wi-Fi para este aparelho"**: com o celular no USB, liga a depuração sem fio sem precisar digitar código. Caminho: `adb shell settings put global adb_wifi_enabled 1`, ler o IP e a porta, depois `adb connect`. **Testado no Galaxy A71 com Android 13: não dispensa.** A chave autorizada pelo USB não vale para o TLS, então o botão cai para o formulário de pareamento e, depois de parear, o app conecta sozinho. Nesse aparelho o shell não lê `service.adb.tls.port`; a porta vem do anúncio mDNS. `adb tcpip 5555` continua proibido (R7).
      - Formulário **Parear** (IP:porta + código de 6 dígitos → `adb pair`).
      - Lista **"Encontrados na rede"** (`adb mdns services`) com o botão **Conectar**.
-  3. Configurações: resolução máxima, FPS, bitrate, ligar ou desligar o controle e o áudio.
-- **Na janela do vídeo:** barra discreta (que some depois de 2 s) com tela cheia, rotação, qualidade, desconectar e o overlay de estatísticas (`Ctrl+Shift+D`).
+  3. Configurações: resolução máxima, FPS, bitrate, ligar ou desligar o controle e manter a tela ligada. O áudio ainda não existe (Fase 4).
+- **Na janela do vídeo:** barra discreta (que some depois de 2 s) com voltar, início, recentes, volume, liga/desliga, rotação, notificações, estatísticas (`Ctrl+Shift+D`), preenchimento (só com o celular deitado), tela cheia e desconectar. A qualidade fica na tela de conexão.
 
 ### 2.5 Viabilidade do Go + Wails: verificada na prática
 Foi feito um spike (depois substituído pela fonte de teste do app, `internal/demo`): o Go gera H.264 com o ffmpeg, separa as access units e envia por WebSocket para uma página com WebCodecs. Resultado neste ambiente (Linux na nuvem):
@@ -121,10 +121,10 @@ Foi feito um spike (depois substituído pela fonte de teste do app, `internal/de
 | WebCodecs disponível | Sim: `VideoDecoder` existe; H.264 Baseline/High, H.265, VP8 e VP9 reportados como suportados |
 | Decodificação H.264 720p60 **com** `gstreamer1.0-libav` | **625 frames em 10 s (~60 fps), 6,6 ms por frame** (software, sem GPU), zero erros |
 | **Sem** `gstreamer1.0-libav` | `isConfigSupported` → `true`, mas cada frame dá `EncodingError: Decode error` |
-| WebSocket da origem `wails://wails` para 127.0.0.1 | Funciona, **desde que o servidor aceite essa origem** (a `coder/websocket` recusa origem diferente por padrão) |
+| WebSocket da origem `wails://wails` para 127.0.0.1 | Funciona, **desde que o servidor aceite essa origem** (a `coder/websocket` recusa origem diferente por padrão). O app final usa `gorilla/websocket`, com a checagem de origem em `internal/stream` |
 | Binário Linux (cgo, webkit2_41) / Windows (sem cgo, compilado no Linux) | 14,5 MB / **11,9 MB** |
 
-O WebView2 do Windows usa o motor do Edge, que tem H.264 por hardware. **Confirmar no seu PC Windows** com o app real.
+O WebView2 do Windows usa o motor do Edge, que tem H.264 por hardware. **Confirmado no PC Windows com o app real** (12/10/2026, Galaxy A71 pelo USB): 864×1920 com ~1 ms de decodificação por frame e nenhum descarte.
 
 **Veredito: Go + Wails é viável nos dois sistemas.** Tudo que é pesado (decodificar e desenhar o vídeo) fica com a webview. O Go só faz entrada e saída, que é o ponto forte dele. O cgo só aparece no build do Linux, que é feito no próprio Linux.
 
@@ -163,16 +163,20 @@ main.go, app.go  app Wails (bindings expostos para a UI)
   /adb         chamadas ao adb (aparelhos, pareamento, Wi-Fi, túnel)
   /scrcpy      protocolo e sessão do scrcpy-server (fonte USB/Wi-Fi)
   /demo        fonte de teste com ffmpeg, sem celular
-  /media       tipos comuns: Source, Event, Input
-  /protocol    parser H.264, formato dos pacotes, mensagens de controle
-  /record      remux para MP4 sem recodificar (biblioteca de MP4 em Go, ou ffmpeg -c copy)
-  /platform    diferenças por SO: localizar adb, udev/driver, checagem do GStreamer, firewall
+  /media       tipos comuns (Source, Event, Input) e utilitários de H.264. O
+               /protocol previsto não foi criado: as mensagens de controle e o
+               formato dos pacotes ficaram em /scrcpy
+  /platform    diferenças por SO: localizar adb, pasta de dados, janela no Hyprland
   /stream      servidor WebSocket local (token + origens do Wails)
-/build         ícones e configuração de empacotamento do Wails (NSIS, .deb)
+/build         ícones e configuração de empacotamento do Wails (NSIS)
 /frontend      Vite + TS: decoder, renderização, telas de conexão e vídeo, captura de input
-/android       app Kotlin (Fase 3)
-/vendor        scrcpy-server.jar (versão fixada + NOTICE da licença)
 /docs
+
+Previstos e ainda não criados:
+  /internal/record   remux para MP4 sem recodificar (Fase 4)
+  /android           app Kotlin (Fase 3)
+  /vendor            scrcpy-server.jar; hoje ele é baixado na primeira execução,
+                     com o SHA-256 fixado no código
 ```
 
 ### 3.2 Interface das fontes (substitui `start()` / `read_frame()`)
@@ -190,7 +194,9 @@ type Controller   interface{ Control() ControlChannel } // opcional: o AppSource
 type EncodedPacket struct { Data []byte; PTSMicros int64; Keyframe bool }
 type StreamInfo    struct { Width, Height int; CodecString string } // ex.: "avc1.42E01F"
 ```
-O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotação. A UI então reconfigura o `VideoDecoder`.
+O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotação. A UI então recria o `VideoDecoder` (o do WebKitGTK não acompanha a troca de resolução sozinho).
+
+O desenho acima era o do plano. A interface implementada é a `media.Source` de `internal/media/media.go`, mais enxuta: `Events()` entrega sessão, configuração e pacotes num canal só, com `Err()`, `RequestKeyframe()`, `HandleInput()` e `Close()`. Não há `BitrateSetter` ainda.
 
 ### 3.3 Regras de desempenho (obrigatórias em todas as fontes)
 1. **Descartar em vez de enfileirar.** Se o WebSocket ou o decoder atrasar, descarta tudo até o próximo keyframe. Atraso acumulado é o pior defeito desse tipo de app.
@@ -203,7 +209,7 @@ O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 
 ## 4. Fases definitivas
 
-> **Estado (13/10/2026):** a Fase 1 está implementada e o Wi-Fi via ADB (Fase 2) já tem interface. Os testes automáticos e a fonte de teste passam no Linux. O que falta testar com celular de verdade está na lista do `CLAUDE.md`. Ainda não feito: taxa adaptativa, pacote `.deb` e instalador NSIS assinado.
+> **Estado (12/10/2026):** a Fase 1 está implementada e o Wi-Fi via ADB (Fase 2) já tem interface. Já rodou com celular de verdade (Galaxy A71, Android 13) no Windows e no Linux: USB, rotação, tela cheia e pareamento e conexão pelo Wi-Fi funcionam. O que falta testar está na lista do `CLAUDE.md`. Ainda não feito: reconexão automática, latência medida, taxa adaptativa, áudio, pacote `.deb` e instalador NSIS assinado.
 
 ### Fase 0: Spike do pipeline (1 a 2 dias)
 - `adb exec-out screenrecord --output-format=h264 --bit-rate 8M --size 1280x720 -` → backend → WebSocket → WebCodecs.
@@ -308,7 +314,7 @@ Suportar os dois sistemas soma ~1 semana no total (empacotamento, udev, driver, 
 - **Latência real:** cronômetro em milissegundos na tela do celular, filmando o celular e o monitor juntos com o celular a 240 fps; média de 30 amostras. Repetir em USB, 5 GHz e 2.4 GHz.
 - **Overlay de debug na UI:** fps, bitrate, frames descartados, tamanho da fila e RTT.
 - **Testes de longa duração:** 2 horas de sessão, acompanhando o uso de memória do backend e da aba.
-- **Testes automáticos:** parser H.264 (fuzzing nativo do Go, `go test -fuzz`, com dados corrompidos) e protocolo de controle, rodando no CI do GitHub Actions em **Ubuntu e Windows**.
+- **Testes automáticos:** parser H.264 (fuzzing nativo do Go, `go test -fuzz`, com dados corrompidos) e protocolo de controle, rodando no CI do GitHub Actions em **Ubuntu e Windows**. As contas da janela e do toque (`frontend/src/fit.ts`) têm testes próprios (`npm test`), que o CI roda no Ubuntu.
 - **Teste manual em Windows físico** a cada fase: driver USB, adb embutido, WebView2 e firewall.
 
 ## 8. Decisões tomadas (definitivo)

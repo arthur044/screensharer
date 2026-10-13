@@ -31,11 +31,11 @@ type Packet struct {
 // Input é um evento de entrada vindo da interface (mouse, teclado, botões).
 // O formato é o JSON enviado pelo frontend (frontend/src/input.ts).
 type Input struct {
-	T      string  `json:"t"`              // touch, scroll, key, text, back, cmd, paste, copy
+	T      string  `json:"t"`              // touch, scroll, key, text, back, cmd, paste, copy, log, window
 	Action int     `json:"a,omitempty"`    // ação Android (0 down, 1 up, 2 move)
 	X      int     `json:"x,omitempty"`    // posição no frame de vídeo
 	Y      int     `json:"y,omitempty"`    //
-	W      int     `json:"w,omitempty"`    // tamanho do frame de vídeo
+	W      int     `json:"w,omitempty"`    // tamanho do frame de vídeo (em "window", o da janela)
 	H      int     `json:"h,omitempty"`    //
 	Btn    uint32  `json:"b,omitempty"`    // botões pressionados
 	ABtn   uint32  `json:"ab,omitempty"`   // botão que mudou de estado

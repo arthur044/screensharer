@@ -21,7 +21,8 @@ Go (internal/scrcpy) ── media.Event ──▶ internal/stream (WebSocket 127
 - `internal/stream`: WebSocket local. Descarta frames até o próximo keyframe quando o cliente atrasa.
 - `internal/demo`: fonte de teste com ffmpeg (`testsrc2`), sem celular.
 - `internal/media`: tipos comuns (`Source`, `Event`, `Input`) e utilitários de H.264.
-- `frontend/src/main.ts`: tela de conexão. `mirror.ts`: vídeo, entrada e estatísticas. `keymap.ts`: teclas → keycodes Android. `selftest.ts`: decodifica um frame embutido na inicialização.
+- `internal/platform`: o que muda por sistema (achar o adb, pasta de dados, esconder o console no Windows) e o ajuste da janela no Hyprland (`hyprland.go`).
+- `frontend/src/main.ts`: tela de conexão. `mirror.ts`: vídeo, entrada, janela e estatísticas. `fit.ts`: contas puras do tamanho da janela e das coordenadas do toque (testadas em `frontend/test`). `keymap.ts`: teclas → keycodes Android. `selftest.ts`: decodifica um frame embutido na inicialização.
 - `frontend/wailsjs/`: gerado pelo Wails (`wails generate module`). Não editar à mão; é regenerado em `wails dev`/`wails build` quando a assinatura de um método de `App` muda.
 
 ## Comandos
@@ -29,13 +30,18 @@ Go (internal/scrcpy) ── media.Event ──▶ internal/stream (WebSocket 127
 ```sh
 go test ./internal/...                                    # testes (rodam sem celular)
 go test -race ./internal/...
-cd frontend && npx tsc --noEmit                           # checagem de tipos do frontend
+cd frontend && npx tsc --noEmit && npm test               # tipos e testes do frontend (Node 22.18+)
 wails dev -tags webkit2_41 -appargs "--debug"             # Linux (sem a tag no Windows)
 wails build -tags webkit2_41                              # build Linux
 wails build -platform windows/amd64                       # build Windows (funciona também no Linux)
+
+# sem o CLI do Wails:
+cd frontend && npm ci && npm run build && cd ..
+go build -tags desktop,production,webkit2_41 -o build/bin/screensharer .               # Linux
+go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/screensharer.exe .   # Windows
 ```
 
-Com `--debug`, o log (`~/.config/screensharer/screensharer.log` ou `%AppData%\screensharer\screensharer.log`) recebe a cada 5 s as estatísticas da interface: fps, kbps, tempo de decodificação, fila e descartes. **Comece por esse log ao diagnosticar.**
+Com `--debug`, o log (`~/.config/screensharer/screensharer.log` ou `%AppData%\screensharer\screensharer.log`) recebe a cada 5 s as estatísticas da interface (fps, kbps, tempo de decodificação, fila e descartes) e uma linha a cada ajuste da janela. **Comece por esse log ao diagnosticar.**
 
 ## Convenções
 
@@ -44,23 +50,30 @@ Com `--debug`, o log (`~/.config/screensharer/screensharer.log` ou `%AppData%\sc
 - O protocolo do scrcpy muda entre versões e o servidor recusa versão diferente. Para atualizar `ServerVersion`, compare `control.go`/`demux.go` com `app/src/control_msg.c`, `app/src/device_msg.c` e `server/.../device/Streamer.java` da nova tag, e atualize `ServerSHA256` (vem do `install_release.sh` da tag).
 - Mudou algo de protocolo ou de parser? Adicione um teste com os bytes esperados (os de `control_test.go` vêm dos testes oficiais do scrcpy).
 
-## Já verificado (na sessão na nuvem, sem celular)
+## Já verificado
 
-- Testes de protocolo batem byte a byte com os testes do scrcpy v5.0.1. A sessão foi testada com adb e celular simulados (`session_test.go`).
-- App real no Linux (WebKitGTK 2.52, Xvfb, sem GPU) com a fonte de teste: 720×1600, 60 fps, decodificação de 4–7 ms, zero descartes. A tela de conexão renderiza com um adb falso.
-- O build Windows compila no Linux (12 MB). **Nunca foi executado no Windows.**
+- **Protocolo:** os testes batem byte a byte com os do scrcpy v5.0.1 (SHA-256 do servidor, mensagens de controle, mensagens do celular e cabeçalho de vídeo). A sessão é testada com adb e celular simulados (`session_test.go`).
+- **Windows 11 + Galaxy A71 (SM-A715F, Android 13), em 12/10/2026:** o app abre e decodifica; USB espelha em 864×1920 com decodificação de ~1 ms, sem descartes, pico de 51 fps e 13,5 Mbps; rotação e tela cheia funcionam; pareamento por código e conexão pelo Wi-Fi funcionam. Controle: "maioria dos testes ok", sem detalhe por item.
+- **Linux (Omarchy, Hyprland 0.56, WebKitGTK 2.52) + o mesmo A71, em 12/10/2026:** USB espelha com decodificação de 4–7 ms, sem descartes; a janela assume a proporção do celular em pé e deitado; o botão de preenchimento aparece só deitado.
+- O build Windows compila no Linux.
 
-## A verificar no PC real (lista de testes)
+## O que os aparelhos reais ensinaram
 
-1. **Windows:** o app abre, o teste do decodificador dá "ok" e a fonte de teste roda a ~60 fps (se o ffmpeg estiver instalado).
-2. **USB:** o aparelho aparece como "pronto". "Espelhar" mostra a tela e o download do scrcpy-server funciona na primeira vez.
-3. **Controle:** toque, arrasto, rolagem, texto com acentos (ç, á), Enter/Backspace/setas, botões da barra, botão direito = voltar, Ctrl+V cola o texto do PC, Ctrl+C traz a seleção do celular.
-4. **Rotação:** girar o celular troca a orientação do vídeo e o toque continua no lugar certo.
-5. **Tela cheia:** F11, o botão e Esc, nos dois sistemas.
-6. **"Ativar Wi-Fi":** descobrir se conecta direto ou se pede pareamento (está em aberto no plano, seção 2.4). Anotar o resultado e o modelo e a versão do Android.
-7. **Wi-Fi:** pareamento por código, "Procurar" (mDNS), conectar e espelhar; desligar e ligar a tela do celular.
-8. **Latência:** filmar um cronômetro na tela do celular junto com o monitor (seção 7 do plano). Meta p50: ≤ 80 ms no USB e ≤ 130 ms no Wi-Fi 5 GHz.
-9. **Xiaomi:** o controle exige "Depuração USB (configurações de segurança)".
+- **"Ativar Wi-Fi" pede pareamento** no A71 com Android 13: a autorização do USB não vale para o Wi-Fi. O shell também não lê `service.adb.tls.port`; a porta vem do anúncio mDNS.
+- **Não pedir keyframe (`RESET_VIDEO`) antes de o vídeo começar:** o scrcpy-server v5.0.1 morre com `NullPointerException`. Quando o espelhamento cai, o motivo real costuma estar no celular: `adb logcat -d -s scrcpy:V AndroidRuntime:E`.
+- **WebKitGTK não acompanha a troca de resolução:** depois de uma rotação o decoder continua entregando o tamanho antigo, com a imagem espremida. Por isso `mirror.ts` recria o decoder a cada mensagem `config`.
+- **Hyprland:** o compositor marca toda janela como em mosaico, o GTK então ignora `WindowSetSize` e `WindowIsMaximised` devolve `true` sempre. O tamanho é pedido ao Hyprland pelo `hyprctl` (`internal/platform/hyprland.go`, sintaxe Lua do 0.5x): a janela fica flutuante durante o espelhamento e volta ao estado anterior no fim.
+
+## A verificar no PC real
+
+1. **Windows com a janela nova (PR #2):** o ajuste da janela veio de código validado lá, mas o botão de preenchimento, a barra que quebra em linhas e a recriação do decoder a cada `config` ainda não rodaram no Windows. Conferir descartes e atraso: cada pedido de keyframe agora recria o decoder.
+2. **Controle, item por item:** toque, arrasto, rolagem, texto com acentos (ç, á), Enter/Backspace/setas, botões da barra, botão direito = voltar, Ctrl+V cola o texto do PC, Ctrl+C traz a seleção do celular.
+3. **Janela:** parar e espelhar de novo o mesmo aparelho (a janela deve se ajustar outra vez); girar o celular em tela cheia e sair dela; no Hyprland, a janela deve voltar ao mosaico ao desconectar.
+4. **Fonte de teste** com ffmpeg no Windows (~60 fps).
+5. **Wi-Fi:** desempenho (fps, descartes) e desligar e ligar a tela do celular.
+6. **Latência:** filmar um cronômetro na tela do celular junto com o monitor (seção 7 do plano). Meta p50: ≤ 80 ms no USB e ≤ 130 ms no Wi-Fi 5 GHz.
+7. **Xiaomi:** o controle exige "Depuração USB (configurações de segurança)".
+8. **Outros ambientes Linux** (GNOME, KDE): o ajuste da janela só foi visto no Hyprland.
 
 ## Ajustes prováveis depois dos testes
 
