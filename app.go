@@ -61,6 +61,8 @@ type App struct {
 	session  *scrcpy.Session
 	srvPath  string
 	devices  []adb.Device
+	// Estado da janela antes de o Hyprland ajustá-la ao vídeo (nil: não mexeu).
+	winBefore *platform.WindowState
 }
 
 func NewApp(flags Flags, log *slog.Logger, dataDir string) *App {
@@ -272,6 +274,7 @@ func (a *App) attach(src media.Source, sess *scrcpy.Session) {
 		a.mu.Unlock()
 		src.Close()
 		if current {
+			a.restoreWindow()
 			reason := ""
 			if err != nil {
 				reason = err.Error()
@@ -295,6 +298,10 @@ func (a *App) handleInput(in media.Input) {
 		a.log.Debug("interface", "stats", in.S)
 		return
 	}
+	if in.T == "window" {
+		a.fitWindow(in.W, in.H)
+		return
+	}
 	if in.T == "paste" {
 		if sess == nil {
 			return
@@ -313,6 +320,40 @@ func (a *App) handleInput(in media.Input) {
 	}
 }
 
+// fitWindow atende o pedido da interface de dar à janela o tamanho do vídeo.
+// Só o Hyprland precisa: nos outros sistemas a própria interface redimensiona.
+func (a *App) fitWindow(w, h int) {
+	if !platform.OnHyprland() || w <= 0 || h <= 0 {
+		return
+	}
+	before, ok, err := platform.HyprlandFit(w, h)
+	if err != nil {
+		a.log.Warn("ajuste da janela", "err", err)
+	}
+	if !ok {
+		return
+	}
+	a.mu.Lock()
+	if a.winBefore == nil {
+		a.winBefore = &before
+	}
+	a.mu.Unlock()
+}
+
+// restoreWindow desfaz o fitWindow quando o espelhamento termina.
+func (a *App) restoreWindow() {
+	a.mu.Lock()
+	before := a.winBefore
+	a.winBefore = nil
+	a.mu.Unlock()
+	if before == nil {
+		return
+	}
+	if err := platform.HyprlandRestore(*before); err != nil {
+		a.log.Warn("restauração da janela", "err", err)
+	}
+}
+
 // StopMirror encerra o espelhamento atual, se houver.
 func (a *App) StopMirror() {
 	a.mu.Lock()
@@ -324,6 +365,7 @@ func (a *App) StopMirror() {
 			a.stream.Detach()
 		}
 		src.Close()
+		a.restoreWindow()
 		wruntime.WindowSetTitle(a.ctx, "screensharer")
 	}
 }

@@ -1,7 +1,11 @@
 // Janela do vídeo: recebe H.264 pelo WebSocket local, decodifica com
 // WebCodecs, desenha no canvas e manda mouse e teclado de volta.
 
-import { WindowFullscreen, WindowIsFullscreen, WindowUnfullscreen } from '../wailsjs/runtime/runtime';
+import {
+  WindowCenter, WindowFullscreen, WindowGetPosition, WindowGetSize, WindowIsFullscreen,
+  WindowIsMaximised, WindowSetMinSize, WindowSetSize, WindowUnfullscreen,
+} from '../wailsjs/runtime/runtime';
+import { FIT_MODES, FitMode, fitSize, MIN_SIDE, Size, toVideoPoint } from './fit';
 import { AKEY, androidKeycode, androidMeta } from './keymap';
 
 // Ações e botões do Android.
@@ -17,6 +21,28 @@ const WARMUP_MS = 1500;
 // e a espera antes da primeira nova tentativa.
 const MAX_DECODE_ERRORS = 5;
 const DECODE_RETRY_MS = 200;
+
+// Durante o espelhamento a janela pode ficar mais estreita que o mínimo do
+// app: um celular em pé numa tela baixa não chega a MIN_SIDE de largura.
+const MIRROR_MIN_SIDE = 160;
+// Espera a janela sair da tela cheia antes de mexer no tamanho dela.
+const UNFULLSCREEN_MS = 200;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Rótulo e dica do botão de preenchimento, que só existe com o celular deitado.
+const FIT_LABELS: Record<FitMode, [string, string]> = {
+  cover: ['Preencher', 'Preenche a janela e corta o que sobra. Clique para trocar.'],
+  contain: ['Inteira', 'Mostra a tela inteira, com faixas se a proporção for outra. Clique para trocar.'],
+  fill: ['Esticar', 'Preenche a janela esticando a imagem. Clique para trocar.'],
+};
+
+function loadFitMode(): FitMode {
+  try {
+    const saved = localStorage.getItem('fitMode') as FitMode | null;
+    if (saved && FIT_MODES.includes(saved)) return saved;
+  } catch { /* sem armazenamento: usa o padrão */ }
+  return 'cover';
+}
 
 export interface MirrorOptions {
   url: string;
@@ -36,6 +62,8 @@ export class Mirror {
 
   private videoW = 0;
   private videoH = 0;
+  private sizeBefore: Size | null = null; // tamanho da janela antes do espelhamento
+  private fitMode = loadFitMode(); // escolhido pelo usuário; vale com o celular deitado
   private ctx: CanvasRenderingContext2D;
 
   // estatísticas
@@ -52,6 +80,7 @@ export class Mirror {
   private hideTimer = 0;
   private retryTimer = 0;
   private lastStats = '';
+  private statsOn = false; // pedido pelo usuário (ou por --debug)
   private ticks = 0;
 
   private pointerDown = false;
@@ -70,7 +99,10 @@ export class Mirror {
 
   start() {
     this.setStatus(`Conectando a ${this.opt.deviceName}…`);
-    this.statsEl.hidden = !this.opt.debug;
+    this.statsOn = this.opt.debug;
+    this.showStats();
+    this.applyFitMode();
+    WindowSetMinSize(MIRROR_MIN_SIDE, MIRROR_MIN_SIDE);
     const ws = new WebSocket(this.opt.url);
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (m) => (typeof m.data === 'string' ? this.onText(m.data) : this.onVideo(m.data));
@@ -93,6 +125,11 @@ export class Mirror {
     for (const off of this.listeners) off();
     this.listeners = [];
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    WindowSetMinSize(MIN_SIDE, MIN_SIDE);
+    if (this.sizeBefore) {
+      WindowSetSize(this.sizeBefore.w, this.sizeBefore.h);
+      this.sizeBefore = null;
+    }
   }
 
   private end(reason: string) {
@@ -114,12 +151,14 @@ export class Mirror {
       case 'session':
         this.videoW = m.width;
         this.videoH = m.height;
+        this.showStats();
+        this.applyFitMode();
         break;
       case 'config':
-        if (m.codec !== this.codec || !this.decoder || this.decoder.state === 'closed') {
-          this.codec = m.codec;
-          this.resetDecoder();
-        }
+        // Sempre recria: SPS/PPS novos podem trazer outro tamanho (rotação), e o
+        // decoder do WebKitGTK continua entregando o tamanho antigo, espremido.
+        this.codec = m.codec;
+        this.resetDecoder();
         break;
       case 'stats':
         this.droppedServer = m.dropped;
@@ -191,14 +230,46 @@ export class Mirror {
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
+      void this.fitWindow({ w, h }); // início ou rotação
     }
+    const rotated = this.videoW !== w || this.videoH !== h;
     this.videoW = w;
     this.videoH = h;
+    if (rotated) {
+      this.showStats();
+      this.applyFitMode();
+    }
     this.ctx.drawImage(frame, 0, 0);
     frame.close();
     if (this.frames === 0) this.setStatus('');
     this.frames++;
     this.decodeErrors = 0;
+  }
+
+  // Deixa a janela com a proporção do vídeo, para não sobrar faixa preta.
+  // Em tela cheia ou maximizada a janela não muda de tamanho.
+  private async fitWindow(video: Size) {
+    if (await WindowIsFullscreen()) return;
+    const maximised = await WindowIsMaximised();
+    const outer = await WindowGetSize();
+    if (this.ended) return;
+    // Borda e barra de título: diferença entre a janela e a área da página.
+    const chrome = { w: outer.w - window.innerWidth, h: outer.h - window.innerHeight };
+    const fit = fitSize(
+      video,
+      { w: window.innerWidth, h: window.innerHeight },
+      { w: screen.availWidth - chrome.w, h: screen.availHeight - chrome.h },
+    );
+    const w = fit.w + chrome.w, h = fit.h + chrome.h;
+    if (this.opt.debug) this.send({ t: 'log', s: `janela ${outer.w}×${outer.h} → ${w}×${h} (maximizada: ${maximised})` });
+    // No Hyprland a janela não consegue mudar o próprio tamanho, e o GTK a dá
+    // como maximizada: quem ajusta é o Go, pelo hyprctl. Fora dele o Go ignora.
+    this.send({ t: 'window', w, h });
+    if (maximised) return;
+    this.sizeBefore ??= outer;
+    WindowSetSize(w, h);
+    const pos = await WindowGetPosition();
+    if (pos.x < 0 || pos.y < 0 || pos.x + w > screen.availWidth || pos.y + h > screen.availHeight) WindowCenter();
   }
 
   private requestKeyframe() {
@@ -233,20 +304,17 @@ export class Mirror {
     this.listeners.push(() => el.removeEventListener(type, fn, opts));
   }
 
-  // Converte coordenadas da janela para o frame de vídeo (canvas com object-fit: contain).
+  // Com o celular em pé a janela tem a proporção dele e o vídeo aparece
+  // inteiro; o modo escolhido pelo usuário só vale com o celular deitado.
+  private effectiveFit(): FitMode {
+    return this.videoW > this.videoH ? this.fitMode : 'contain';
+  }
+
+  // Converte coordenadas da janela para o frame de vídeo, conforme o preenchimento.
   private toVideo(e: PointerEvent | WheelEvent) {
     const r = this.canvas.getBoundingClientRect();
-    const scale = Math.min(r.width / this.videoW, r.height / this.videoH);
-    const offX = (r.width - this.videoW * scale) / 2;
-    const offY = (r.height - this.videoH * scale) / 2;
-    const x = Math.round((e.clientX - r.left - offX) / scale);
-    const y = Math.round((e.clientY - r.top - offY) / scale);
-    const inside = x >= 0 && y >= 0 && x < this.videoW && y < this.videoH;
-    return {
-      x: Math.max(0, Math.min(this.videoW - 1, x)),
-      y: Math.max(0, Math.min(this.videoH - 1, y)),
-      w: this.videoW, h: this.videoH, inside,
-    };
+    const p = toVideoPoint(this.effectiveFit(), r.width, r.height, this.videoW, this.videoH, e.clientX - r.left, e.clientY - r.top);
+    return { ...p, w: this.videoW, h: this.videoH };
   }
 
   private bindInput() {
@@ -322,6 +390,7 @@ export class Mirror {
     for (const btn of Array.from(this.toolbar.querySelectorAll<HTMLButtonElement>('button[data-cmd]'))) {
       this.on(btn, 'click', () => { this.send({ t: 'cmd', s: btn.dataset.cmd }); c.focus(); });
     }
+    this.on(document.getElementById('fit-btn')!, 'click', () => { this.nextFitMode(); c.focus(); });
     this.on(document.getElementById('fs-btn')!, 'click', () => this.toggleFullscreen());
     this.on(document.getElementById('stats-btn')!, 'click', () => this.toggleStats());
     this.on(document.getElementById('stop-btn')!, 'click', () => this.end(''));
@@ -351,7 +420,7 @@ export class Mirror {
       }
       if (action === DOWN && (await WindowIsFullscreen())) {
         this.escConsumed = true;
-        WindowUnfullscreen();
+        this.leaveFullscreen();
         return;
       }
     }
@@ -379,14 +448,41 @@ export class Mirror {
   }
 
   private async toggleFullscreen() {
-    if (await WindowIsFullscreen()) WindowUnfullscreen();
+    if (await WindowIsFullscreen()) this.leaveFullscreen();
     else WindowFullscreen();
     this.canvas.focus();
   }
 
+  // O celular pode ter girado durante a tela cheia: ao sair, ajusta a janela de novo.
+  private async leaveFullscreen() {
+    WindowUnfullscreen();
+    await sleep(UNFULLSCREEN_MS);
+    if (!this.ended && this.videoW) void this.fitWindow({ w: this.videoW, h: this.videoH });
+  }
+
+  private applyFitMode() {
+    this.canvas.style.objectFit = this.effectiveFit();
+    const btn = document.getElementById('fit-btn')!;
+    btn.hidden = this.videoW <= this.videoH;
+    [btn.textContent, btn.title] = FIT_LABELS[this.fitMode];
+  }
+
+  private nextFitMode() {
+    this.fitMode = FIT_MODES[(FIT_MODES.indexOf(this.fitMode) + 1) % FIT_MODES.length];
+    try { localStorage.setItem('fitMode', this.fitMode); } catch { /* sem armazenamento */ }
+    this.applyFitMode();
+  }
+
   private toggleStats() {
-    this.statsEl.hidden = !this.statsEl.hidden;
-    this.statsEl.textContent = this.lastStats;
+    this.statsOn = !this.statsOn;
+    this.showStats();
+  }
+
+  // Com o celular deitado o quadro de estatísticas cobre o vídeo, que fica
+  // baixo; por isso ele só aparece com o celular em pé.
+  private showStats() {
+    this.statsEl.hidden = !this.statsOn || this.videoW > this.videoH;
+    if (!this.statsEl.hidden) this.statsEl.textContent = this.lastStats;
   }
 
   private showToolbar() {
