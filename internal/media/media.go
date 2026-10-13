@@ -1,14 +1,28 @@
 // Package media define o que todas as fontes de vídeo entregam ao resto do app
-// (o VideoSource do plano): eventos de sessão, de configuração e pacotes H.264.
+// (o VideoSource do plano): eventos de sessão, de configuração, pacotes H.264
+// e blocos de áudio.
 package media
 
 import "fmt"
 
-// Event é uma das três coisas que uma fonte produz. Só um dos campos vem preenchido.
+// Event é uma das quatro coisas que uma fonte produz. Só um dos campos vem preenchido.
 type Event struct {
 	Session *Session // nova sessão de captura (início ou rotação)
 	Config  *Config  // SPS/PPS novos: o decoder deve ser (re)configurado
 	Packet  *Packet  // uma access unit H.264 em Annex B
+	Audio   *Audio   // um bloco de áudio PCM
+}
+
+// Formato do áudio: PCM de 16 bits little-endian, intercalado.
+const (
+	AudioSampleRate = 48000
+	AudioChannels   = 2
+)
+
+// Audio é um bloco de PCM no formato acima (cerca de 21 ms por bloco no scrcpy).
+type Audio struct {
+	Data []byte
+	PTS  int64 // microssegundos
 }
 
 // Session traz o tamanho do vídeo da sessão de captura atual.

@@ -147,6 +147,8 @@ summary { cursor: pointer; color: var(--accent); }
   padding: 24px;
   white-space: pre-wrap;
 }
+/* Aviso por cima do vídeo: precisa de fundo para dar leitura. */
+.status.notice { color: var(--text); background: rgba(0, 0, 0, .75); }
 
 .toolbar {
   position: absolute;

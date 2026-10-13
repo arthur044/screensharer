@@ -30,6 +30,7 @@ type Options struct {
 	MaxFPS    int  // 0 = sem limite
 	BitRate   int  // bits por segundo
 	Control   bool // mouse e teclado do PC controlam o celular
+	Audio     bool // o som do celular toca no PC (Android 11+); o celular fica mudo
 	StayAwake bool // mantém a tela ligada enquanto conectado pelo USB
 
 	OnClipboard func(text string) // texto copiado no celular (chamado em outra goroutine)
@@ -44,18 +45,23 @@ type Session struct {
 	port   int
 	cmd    *exec.Cmd
 	video  net.Conn
+	audio  net.Conn
 	ctrl   net.Conn
 	log    *slog.Logger
 	srvOut *lockedBuffer
 
 	events chan media.Event
 	done   chan struct{}
+	// evMu protege o fechamento de events: o vídeo fecha o canal, e o áudio
+	// escreve nele de outra goroutine.
+	evMu     sync.RWMutex
+	evClosed bool
 
 	// videoStarted fica verdadeiro na primeira sessão de vídeo. Antes disso a
 	// captura ainda não existe no servidor, e um RESET_VIDEO o derruba.
 	videoStarted atomic.Bool
 
-	mu      sync.Mutex
+	mu       sync.Mutex
 	err      error
 	closed   bool
 	clipSeq  uint64
@@ -95,7 +101,7 @@ func Start(ctx context.Context, client *adb.Client, serial, serverPath string, o
 		fmt.Sprintf("scid=%08x", scid),
 		"log_level=info",
 		"tunnel_forward=true",
-		"audio=false",
+		"audio=" + strconv.FormatBool(opt.Audio),
 		"video_codec=h264",
 		"control=" + strconv.FormatBool(opt.Control),
 	}
@@ -110,6 +116,10 @@ func Start(ctx context.Context, client *adb.Client, serial, serverPath string, o
 	}
 	if opt.StayAwake {
 		args = append(args, "stay_awake=true")
+	}
+	if opt.Audio {
+		// PCM sem compressão: não depende de decodificador de áudio na webview.
+		args = append(args, "audio_codec=raw")
 	}
 	s.cmd = client.Command(context.Background(), args...)
 	s.cmd.Stdout, s.cmd.Stderr = s.srvOut, s.srvOut
@@ -147,6 +157,12 @@ func Start(ctx context.Context, client *adb.Client, serial, serverPath string, o
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	// A ordem das conexões é fixa: vídeo, áudio, controle.
+	if opt.Audio {
+		if s.audio, err = net.DialTimeout("tcp", addr, 5*time.Second); err != nil {
+			return nil, fmt.Errorf("conectando o canal de áudio: %w", err)
+		}
+	}
 	if opt.Control {
 		if s.ctrl, err = net.DialTimeout("tcp", addr, 5*time.Second); err != nil {
 			return nil, fmt.Errorf("conectando o canal de controle: %w", err)
@@ -165,6 +181,9 @@ func Start(ctx context.Context, client *adb.Client, serial, serverPath string, o
 	s.DeviceName = string(bytes.TrimRight(name[:], "\x00"))
 
 	go s.readLoop()
+	if s.audio != nil {
+		go s.audioLoop()
+	}
 	if s.ctrl != nil {
 		go func() {
 			err := readDeviceMessages(s.ctrl, opt.OnClipboard)
@@ -183,8 +202,33 @@ func Start(ctx context.Context, client *adb.Client, serial, serverPath string, o
 	return s, nil
 }
 
+// audioLoop repassa o áudio como eventos. Se a fila estiver cheia o bloco é
+// descartado: áudio atrasado é pior que um estalo, e o vídeo não pode esperar.
+func (s *Session) audioLoop() {
+	err := readAudio(s.audio, func(a *media.Audio) bool {
+		s.evMu.RLock()
+		defer s.evMu.RUnlock()
+		if s.evClosed {
+			return false
+		}
+		select {
+		case s.events <- media.Event{Audio: a}:
+		default:
+		}
+		return true
+	})
+	if err != nil && !s.isClosed() {
+		s.log.Warn("áudio encerrado", "err", err)
+	}
+}
+
 func (s *Session) readLoop() {
-	defer close(s.events)
+	defer func() {
+		s.evMu.Lock()
+		s.evClosed = true
+		close(s.events)
+		s.evMu.Unlock()
+	}()
 	err := readVideo(s.video, func(e media.Event) bool {
 		if e.Session != nil {
 			s.videoStarted.Store(true)
@@ -210,7 +254,7 @@ func (s *Session) readLoop() {
 	s.mu.Unlock()
 }
 
-// Events entrega sessões, configurações e pacotes de vídeo.
+// Events entrega sessões, configurações, pacotes de vídeo e blocos de áudio.
 func (s *Session) Events() <-chan media.Event { return s.events }
 
 // Err diz por que a sessão terminou.
@@ -312,6 +356,9 @@ func (s *Session) Close() error {
 	close(s.done)
 	if s.video != nil {
 		s.video.Close()
+	}
+	if s.audio != nil {
+		s.audio.Close()
 	}
 	if s.ctrl != nil {
 		s.ctrl.Close()

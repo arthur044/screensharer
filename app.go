@@ -38,10 +38,11 @@ type Settings struct {
 	BitRateMbps int  `json:"bitRateMbps"` //
 	Control     bool `json:"control"`     // mouse e teclado controlam o celular
 	StayAwake   bool `json:"stayAwake"`   // tela ligada enquanto conectado
+	Audio       bool `json:"audio"`       // o som do celular toca no PC
 }
 
 func defaultSettings() Settings {
-	return Settings{MaxSize: 1920, MaxFPS: 60, BitRateMbps: 8, Control: true, StayAwake: true}
+	return Settings{MaxSize: 1920, MaxFPS: 60, BitRateMbps: 8, Control: true, StayAwake: true, Audio: true}
 }
 
 // App concentra o estado e os métodos expostos à interface (bindings do Wails).
@@ -220,6 +221,7 @@ func (a *App) StartMirror(serial string) (MirrorInfo, error) {
 		BitRate:   set.BitRateMbps * 1_000_000,
 		Control:   set.Control,
 		StayAwake: set.StayAwake,
+		Audio:     set.Audio,
 		OnClipboard: func(text string) {
 			wruntime.ClipboardSetText(a.ctx, text)
 		},

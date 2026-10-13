@@ -109,6 +109,7 @@ export namespace main {
 	    bitRateMbps: number;
 	    control: boolean;
 	    stayAwake: boolean;
+	    audio: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new Settings(source);
@@ -121,6 +122,7 @@ export namespace main {
 	        this.bitRateMbps = source["bitRateMbps"];
 	        this.control = source["control"];
 	        this.stayAwake = source["stayAwake"];
+	        this.audio = source["audio"];
 	    }
 	}
 

@@ -259,6 +259,15 @@ func (p *pump) handle(e media.Event) {
 	}
 	c, hasClient := p.srv.current()
 	switch {
+	case e.Audio != nil && hasClient:
+		frame := make([]byte, 9+len(e.Audio.Data))
+		frame[0] = frameAudio
+		binary.BigEndian.PutUint64(frame[1:], uint64(e.Audio.PTS))
+		copy(frame[9:], e.Audio.Data)
+		select {
+		case c.out <- frame:
+		default: // cliente atrasado: o áudio só se perde, sem pedir keyframe
+		}
 	case e.Packet != nil && hasClient:
 		pkt := e.Packet
 		if c.waitKey.Load() {
@@ -268,7 +277,7 @@ func (p *pump) handle(e media.Event) {
 			c.waitKey.Store(false)
 		}
 		frame := make([]byte, 10+len(pkt.Data))
-		frame[0] = 1
+		frame[0] = frameVideo
 		if pkt.Key {
 			frame[1] = 1
 		}
@@ -285,9 +294,18 @@ func (p *pump) handle(e media.Event) {
 	}
 }
 
+// Primeiro byte das mensagens binárias mandadas à interface.
+//
+//	vídeo: tipo, flags (bit 0 = keyframe), PTS (8 bytes), access unit H.264
+//	áudio: tipo, PTS (8 bytes), PCM (media.AudioSampleRate, media.AudioChannels)
+const (
+	frameVideo = 1
+	frameAudio = 2
+)
+
 type client struct {
 	conn    *websocket.Conn
-	out     chan []byte // vídeo (binário)
+	out     chan []byte // vídeo e áudio (binário)
 	text    chan []byte // eventos (JSON)
 	done    chan struct{}
 	once    sync.Once

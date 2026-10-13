@@ -205,6 +205,8 @@ function showMirror(info: main.MirrorInfo) {
     url: info.url,
     deviceName: info.deviceName,
     control: info.control,
+    audio: $<HTMLInputElement>('set-audio').checked,
+    os: env.os,
     debug: env.debug,
     onEnd: (reason) => leaveMirror(reason),
   });
@@ -232,6 +234,7 @@ async function loadSettings() {
   $<HTMLSelectElement>('set-bitrate').value = String(s.bitRateMbps);
   $<HTMLInputElement>('set-control').checked = s.control;
   $<HTMLInputElement>('set-awake').checked = s.stayAwake;
+  $<HTMLInputElement>('set-audio').checked = s.audio;
   $('settings-form').addEventListener('change', () => {
     SaveSettings(main.Settings.createFrom({
       maxSize: Number($<HTMLSelectElement>('set-size').value),
@@ -239,6 +242,7 @@ async function loadSettings() {
       bitRateMbps: Number($<HTMLSelectElement>('set-bitrate').value),
       control: $<HTMLInputElement>('set-control').checked,
       stayAwake: $<HTMLInputElement>('set-awake').checked,
+      audio: $<HTMLInputElement>('set-audio').checked,
     })).catch((e) => banner(errText(e), 'error'));
   });
 }
