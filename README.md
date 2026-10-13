@@ -8,9 +8,9 @@ O plano completo (decisões, riscos, custos e fases) está em [docs/PLANO.md](do
 
 | | Windows | Linux |
 |---|---|---|
-| Rodar | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (já vem no Windows 10/11 atualizado) | `libwebkit2gtk-4.1-0`, `libgtk-3-0` e **`gstreamer1.0-libav`** (decodificador H.264) |
+| Rodar | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (já vem no Windows 10/11 atualizado) | `libwebkit2gtk-4.1-0`, `libgtk-3-0` e **`gstreamer1.0-libav`** (decodificador H.264; no Arch, `gst-libav`) |
 | adb | [Android platform-tools](https://developer.android.com/tools/releases/platform-tools) no PATH, ou `--adb CAMINHO` | `sudo apt install adb` (já traz as regras udev) |
-| Desenvolver | Go 1.25+, Node 20+, CLI do Wails | igual, mais `libgtk-3-dev` e `libwebkit2gtk-4.1-dev` |
+| Desenvolver | Go 1.25+, Node 20+ (22.18+ para os testes do frontend), CLI do Wails | igual, mais `libgtk-3-dev` e `libwebkit2gtk-4.1-dev` |
 
 CLI do Wails: `go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`. O `wails doctor` confere o que falta.
 
@@ -26,6 +26,14 @@ wails dev -appargs "--debug"                        # Windows
 # build
 wails build -tags webkit2_41                        # Linux  → build/bin/screensharer
 wails build -platform windows/amd64                 # Windows → build/bin/screensharer.exe (também dá para compilar no Linux)
+```
+
+Sem o CLI do Wails também compila:
+
+```sh
+cd frontend && npm ci && npm run build && cd ..
+go build -tags desktop,production,webkit2_41 -o build/bin/screensharer .                    # Linux
+go build -tags desktop,production -ldflags "-H windowsgui" -o build/bin/screensharer.exe .  # Windows
 ```
 
 Os executáveis de cada commit também ficam nos artefatos do CI (aba Actions do GitHub).
@@ -56,15 +64,20 @@ Na janela do vídeo:
 | Início | Botão do meio |
 | Colar o clipboard do PC no celular | Ctrl+V |
 | Copiar a seleção do celular para o PC | Ctrl+C |
-| Estatísticas | Ctrl+Shift+D |
+| Estatísticas | Ctrl+Shift+D ou o botão ⓘ (só aparecem com o celular em pé) |
 
 A barra de botões aparece quando o mouse chega ao topo da janela. Se o controle estiver desligado, o duplo clique também alterna a tela cheia.
+
+A janela assume a proporção do celular ao começar e a cada rotação, para não sobrar faixa preta, e volta ao tamanho anterior ao desconectar. Em tela cheia ou maximizada a proporção não bate; com o celular deitado, um botão na barra escolhe o que fazer: **Preencher** (corta as sobras), **Inteira** (com faixas) ou **Esticar**. Com o celular em pé a imagem aparece sempre inteira.
+
+No Hyprland a janela fica flutuante durante o espelhamento (é o `hyprctl` que muda o tamanho dela) e volta ao estado anterior no fim. Precisa da configuração em Lua do Hyprland 0.5x.
 
 ## Testes
 
 ```sh
 go test ./internal/...
 go test ./internal/scrcpy -run=^$ -fuzz=FuzzReadVideo -fuzztime=30s
+cd frontend && npx tsc --noEmit && npm test    # contas da janela e do toque
 ```
 
 Sem celular, use **Abrir fonte de teste** (precisa do `ffmpeg` no PATH): ela gera vídeo sintético pelo mesmo caminho do celular.
