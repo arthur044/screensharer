@@ -118,6 +118,17 @@ func hyprResize(w, h int) error {
 	return hyprDispatch("center", "")
 }
 
+// hyprIdleInhibit marca a janela do app como exibindo vídeo, para o Hyprland
+// segurar o protetor de tela e o bloqueio. O valor é numérico (1 = sempre,
+// 0 = nunca): o set_prop aceita os nomes sem erro, mas não os aplica.
+func hyprIdleInhibit(on bool) error {
+	value := 0
+	if on {
+		value = 1
+	}
+	return hyprDispatch("set_prop", fmt.Sprintf("prop = 'idle_inhibit', value = '%d'", value))
+}
+
 // hyprDispatch chama hl.dsp.window.<name> para a janela deste processo.
 func hyprDispatch(name, args string) error {
 	if args != "" {
