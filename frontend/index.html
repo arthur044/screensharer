@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>screensharer</title>
+</head>
+<body>
+  <!-- Tela de conexão -->
+  <main id="connect-view">
+    <header class="top">
+      <h1>screensharer</h1>
+      <span id="env-line" class="muted"></span>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>USB</h2>
+        <span class="muted">Ative a Depuração USB no celular e conecte o cabo.</span>
+      </div>
+      <ul id="usb-list" class="device-list"></ul>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>Wi-Fi</h2>
+        <span class="muted">Android 11+ · PC e celular na mesma rede.</span>
+      </div>
+      <ul id="wifi-list" class="device-list"></ul>
+
+      <h3>Encontrados na rede</h3>
+      <div class="row">
+        <button id="discover-btn" class="secondary">Procurar</button>
+        <span id="discover-status" class="muted"></span>
+      </div>
+      <ul id="mdns-list" class="device-list"></ul>
+
+      <details id="pair-box">
+        <summary>Parear um celular novo</summary>
+        <p class="muted">
+          No celular: Opções do desenvolvedor → Depuração sem fio → <b>Parear dispositivo com código de pareamento</b>.
+          Digite o IP:porta e o código que aparecem lá.
+        </p>
+        <form id="pair-form" class="row">
+          <input id="pair-addr" placeholder="192.168.0.15:41235" autocomplete="off" required />
+          <input id="pair-code" placeholder="Código (6 dígitos)" inputmode="numeric" autocomplete="off" required />
+          <button type="submit">Parear</button>
+        </form>
+        <p class="muted">Depois de parear, o app conecta sozinho. Se não conectar, informe o IP:porta mostrado em "Depuração sem fio" (a porta é outra):</p>
+        <form id="connect-form" class="row">
+          <input id="connect-addr" placeholder="192.168.0.15:37099" autocomplete="off" required />
+          <button type="submit">Conectar</button>
+        </form>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Qualidade</h2></div>
+      <form id="settings-form" class="settings">
+        <label>Resolução máxima
+          <select id="set-size">
+            <option value="1280">720p (1280)</option>
+            <option value="1920">1080p (1920)</option>
+            <option value="2560">1440p (2560)</option>
+            <option value="0">Original do aparelho</option>
+          </select>
+        </label>
+        <label>FPS
+          <select id="set-fps">
+            <option value="30">30</option>
+            <option value="60">60</option>
+            <option value="0">Sem limite</option>
+          </select>
+        </label>
+        <label>Bitrate
+          <select id="set-bitrate">
+            <option value="2">2 Mbps (Wi-Fi fraco)</option>
+            <option value="4">4 Mbps</option>
+            <option value="8">8 Mbps</option>
+            <option value="16">16 Mbps</option>
+          </select>
+        </label>
+        <label class="check"><input type="checkbox" id="set-control" /> Controlar o celular com mouse e teclado</label>
+        <label class="check"><input type="checkbox" id="set-awake" /> Manter a tela do celular ligada</label>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2>Diagnóstico</h2></div>
+      <dl id="diag" class="diag"></dl>
+      <div class="row">
+        <button id="demo-btn" class="secondary">Abrir fonte de teste</button>
+        <span class="muted">Vídeo sintético (precisa do ffmpeg) para testar a janela sem celular.</span>
+      </div>
+    </section>
+  </main>
+
+  <!-- Janela do vídeo -->
+  <div id="mirror-view" hidden>
+    <canvas id="screen" tabindex="0"></canvas>
+    <div id="status" class="status"></div>
+    <nav id="toolbar" class="toolbar">
+      <button data-key="4" title="Voltar">◁</button>
+      <button data-key="3" title="Início">○</button>
+      <button data-key="187" title="Apps recentes">▢</button>
+      <span class="sep"></span>
+      <button data-key="25" title="Volume −">🔉</button>
+      <button data-key="24" title="Volume +">🔊</button>
+      <button data-key="26" title="Liga/desliga">⏻</button>
+      <button data-cmd="rotate" title="Girar">⟳</button>
+      <button data-cmd="notifications" title="Notificações">▾</button>
+      <span class="sep"></span>
+      <button id="stats-btn" title="Estatísticas (Ctrl+Shift+D)">ⓘ</button>
+      <button id="fs-btn" title="Tela cheia (F11)">⛶</button>
+      <button id="stop-btn" class="danger" title="Desconectar">✕</button>
+    </nav>
+    <pre id="stats" class="stats" hidden></pre>
+  </div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

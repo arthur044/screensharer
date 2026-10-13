@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Testes Go
+        run: go test ${{ matrix.os == 'ubuntu-latest' && '-race' || '' }} ./internal/...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Dependências do Wails no Linux
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: CLI do Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      - name: Build Linux
+        run: wails build -tags webkit2_41
+      - name: Build Windows
+        run: wails build -platform windows/amd64 -webview2 download
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screensharer-linux-amd64
+          path: build/bin/screensharer
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screensharer-windows-amd64
+          path: build/bin/screensharer.exe
