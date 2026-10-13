@@ -85,12 +85,12 @@ O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o 
 |---|---|
 | **Wails v2** | **Escolhido.** Janela nativa com bindings Go↔JS, ~12–15 MB. No Linux, depende do GStreamer com H.264 (mitigado em 2.5) |
 | Electron | Descartado: ~100 MB e um segundo runtime (Node) ao lado do Go |
-| Navegador em modo app | Fica só como **modo de diagnóstico** (`--browser`): a mesma UI servida em 127.0.0.1, útil se a webview de alguma máquina der problema |
+| Navegador | Só para diagnóstico: o `wails dev` também serve a interface em `http://localhost:34115`, com os bindings funcionando, e ela pode ser aberta no Chrome ou no Edge |
 | Tauri | Mesmo motor do Wails no Linux, mas com backend em Rust |
 | Wails v3 | Ainda não é a versão estável; migrar quando sair, se trouxer vantagem |
 
 ### 2.4 Janela e interface (requisitos do dono do projeto)
-- **Janela própria com tela cheia.** A janela é do Wails, e a tela cheia é **nativa** (`runtime.WindowFullscreen` / `WindowUnfullscreen`). Para entrar: **F11**, **duplo clique no vídeo** ou um botão; `Esc` sai.
+- **Janela própria com tela cheia.** A janela é do Wails, e a tela cheia é **nativa** (`runtime.WindowFullscreen` / `WindowUnfullscreen`). Para entrar: **F11** ou um botão; `Esc` sai. O **duplo clique** só alterna a tela cheia com o controle desligado, porque com controle ele é um toque duplo no celular.
   - Essas teclas são tratadas pelo próprio app, então funcionam igual no WebView2 e no WebKitGTK.
   - As demais teclas vão para o celular quando o controle estiver ligado.
   - O app lembra o tamanho e a posição da janela.
@@ -104,7 +104,7 @@ O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o 
 - **Na janela do vídeo:** barra discreta (que some depois de 2 s) com tela cheia, rotação, qualidade, desconectar e o overlay de estatísticas (`Ctrl+Shift+D`).
 
 ### 2.5 Viabilidade do Go + Wails: verificada na prática
-Foi feito um spike (`cmd/spike-webcodecs`): o Go gera H.264 com o ffmpeg, separa as access units e envia por WebSocket para uma página com WebCodecs. Resultado neste ambiente (Linux na nuvem):
+Foi feito um spike (depois substituído pela fonte de teste do app, `internal/demo`): o Go gera H.264 com o ffmpeg, separa as access units e envia por WebSocket para uma página com WebCodecs. Resultado neste ambiente (Linux na nuvem):
 
 | Item medido | Resultado |
 |---|---|
@@ -133,7 +133,7 @@ O WebView2 do Windows usa o motor do Edge, que tem H.264 por hardware. **Confirm
 **Mitigação obrigatória no Linux** (o `isConfigSupported` não é confiável):
 1. Na inicialização, o app **decodifica um frame H.264 de teste embutido no binário** (poucos KB). Se falhar, mostra: "Instale o decodificador de vídeo: `sudo apt install gstreamer1.0-libav`" (com o comando de cada distro: apt, dnf, pacman).
 2. O `.deb` declara `gstreamer1.0-libav` como dependência, então quem instala pelo pacote nunca cai nesse caso.
-3. Se a webview falhar por outro motivo, o modo `--browser` abre a mesma UI no Chrome ou no Edge.
+3. Se a webview falhar por outro motivo, o `wails dev` permite abrir a mesma UI no Chrome ou no Edge, para comparar.
 
 **Segurança do WebSocket local:** escuta só em 127.0.0.1, numa porta aleatória, aceita só as origens do Wails (`wails://wails` no Linux, `http://wails.localhost` no Windows) e exige um token aleatório gerado a cada execução. Assim, nenhum site aberto no navegador consegue se conectar ao stream.
 
@@ -144,7 +144,7 @@ O WebView2 do Windows usa o motor do Edge, que tem H.264 por hardware. **Confirm
 | Seu PC + Claude Code local | `git pull` → `wails dev` (recarrega a interface na hora) com o celular conectado: testes em tempo real, medição de latência, ajustes finos por aparelho |
 
 Para facilitar essa passagem:
-- Requisitos no PC: **Go 1.24+**, **Node 20+** (só para o build do frontend) e o **CLI do Wails** (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`). No Linux, também `libwebkit2gtk-4.1-dev`, `libgtk-3-dev` e `gstreamer1.0-libav`. O `wails doctor` confere tudo. O adb pode ser o do sistema ou um caminho dado por `--adb`. O `scrcpy-server` é baixado na primeira execução **com checagem do SHA-256 fixado no código**: o download do GitHub está bloqueado neste ambiente, mas no seu PC funciona.
+- Requisitos no PC: **Go 1.25+** (exigido pelo Wails v2.16), **Node 20+** (só para o build do frontend) e o **CLI do Wails** (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0`). No Linux, também `libwebkit2gtk-4.1-dev`, `libgtk-3-dev` e `gstreamer1.0-libav`. O `wails doctor` confere tudo. O adb pode ser o do sistema ou um caminho dado por `--adb`. O `scrcpy-server` é baixado na primeira execução **com checagem do SHA-256 fixado no código**: o download do GitHub está bloqueado neste ambiente, mas no seu PC funciona.
 - `--debug` liga logs detalhados e o overlay de estatísticas, para o Claude no seu PC diagnosticar com dados reais.
 - Um `CLAUDE.md` na raiz vai explicar a arquitetura, os comandos e o que testar, para o Claude local continuar sem você precisar repetir o contexto.
 
@@ -160,7 +160,10 @@ Para facilitar essa passagem:
 ```
 main.go, app.go  app Wails (bindings expostos para a UI)
 /internal      pacotes Go
-  /source      UsbSource, WifiAdbSource, AppSource, ScreenrecordSource (só para o spike)
+  /adb         chamadas ao adb (aparelhos, pareamento, Wi-Fi, túnel)
+  /scrcpy      protocolo e sessão do scrcpy-server (fonte USB/Wi-Fi)
+  /demo        fonte de teste com ffmpeg, sem celular
+  /media       tipos comuns: Source, Event, Input
   /protocol    parser H.264, formato dos pacotes, mensagens de controle
   /record      remux para MP4 sem recodificar (biblioteca de MP4 em Go, ou ffmpeg -c copy)
   /platform    diferenças por SO: localizar adb, udev/driver, checagem do GStreamer, firewall
@@ -199,6 +202,8 @@ O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 ---
 
 ## 4. Fases definitivas
+
+> **Estado (13/10/2026):** a Fase 1 está implementada e o Wi-Fi via ADB (Fase 2) já tem interface. Os testes automáticos e a fonte de teste passam no Linux. O que falta testar com celular de verdade está na lista do `CLAUDE.md`. Ainda não feito: taxa adaptativa, pacote `.deb` e instalador NSIS assinado.
 
 ### Fase 0: Spike do pipeline (1 a 2 dias)
 - `adb exec-out screenrecord --output-format=h264 --bit-rate 8M --size 1280x720 -` → backend → WebSocket → WebCodecs.
@@ -252,9 +257,9 @@ O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 | R10 | Fase 3: o Android 14+ pede consentimento **a cada sessão**, e alguns fabricantes matam o foreground service | A | M | Comportamento do sistema, não tem como evitar. Explicar na UI e pedir para tirar o app da otimização de bateria |
 | R11 | Firewall do Windows bloqueia a porta da Fase 3 | A | B | Regra criada pelo instalador ou instrução na primeira execução |
 | R12 | Aquecimento e bateria em sessões longas | M | M | Cair para 30 fps com a tela parada; perfil econômico |
-| R15 | Linux: sem regra udev o aparelho aparece como `no permissions` | A | M | O AppImage detecta isso e mostra o comando para instalar a regra; documentar o pacote da distro |
+| R15 | Linux: sem regra udev o aparelho aparece como `no permissions` | A | M | A tela de conexão detecta esse estado e mostra o comando para instalar a regra; o `.deb` declara a dependência |
 | R16 | Linux: decodificação por software (sem VAAPI no GStreamer) | A | B | ~6–7 ms por frame em 720p, medido; 1080p60 cabe num núcleo; perfil 720p para máquinas fracas. VAAPI via `gstreamer1.0-vaapi` quando houver |
-| R18 | Linux: GStreamer **sem decodificador H.264** (sem `gstreamer1.0-libav`). O `isConfigSupported` mente e a decodificação falha (testado) | M | A | Frame de teste na inicialização + mensagem com o comando de instalação; dependência no `.deb`; modo `--browser` como alternativa |
+| R18 | Linux: GStreamer **sem decodificador H.264** (sem `gstreamer1.0-libav`). O `isConfigSupported` mente e a decodificação falha (testado) | M | A | Frame de teste na inicialização + mensagem com o comando de instalação; dependência no `.deb` |
 | R19 | Diferenças entre WebView2 e WebKitGTK (eventos de teclado, tela cheia, desempenho do canvas) | M | M | Mesmos testes manuais nos dois a cada fase; tela cheia nativa do Wails; evitar APIs exclusivas do Chromium (Keyboard Lock) |
 | R20 | Windows sem o WebView2 Runtime (Windows 10 antigo ou sem atualizações) | B | M | O instalador NSIS do Wails baixa o runtime |
 | R17 | Projeto desenvolvido no Linux e Windows testado pouco | M | A | CI com `windows-latest` + teste manual em Windows físico por fase |
@@ -273,7 +278,7 @@ O evento `Config` dispara quando chegam SPS/PPS novos, por exemplo numa rotaçã
 | Aparelhos de teste (2 a 3 usados: Samsung, Xiaomi, Motorola) | ~R$ 1.500–2.500, uma vez (opcional se já tiver) |
 | Google Play (Fase 3) | US$ 25, uma vez (ou distribuir o APK direto, de graça) |
 | Assinatura de código no Windows (só se distribuir o instalador) | ~US$ 10/mês (Azure Trusted Signing) |
-| Linux (AppImage/tar.gz) | R$ 0; não exige assinatura |
+| Linux (`.deb`/`.tar.gz`) | R$ 0; não exige assinatura |
 | CI para Linux + Windows (GitHub Actions) | Grátis em repositório público; em privado, a cota grátis costuma bastar (minutos de Windows contam em dobro) |
 | Espelhar pela internet (fora do escopo) | Precisaria de relay TURN: ~US$ 0,20–0,30 por hora por usuário a 8 Mbps |
 
@@ -315,4 +320,4 @@ Suportar os dois sistemas soma ~1 semana no total (empacotamento, udev, driver, 
 6. Controle remoto e clipboard: **sobem para a Fase 1** no modo ADB. No app próprio, só visualização.
 7. Fase 3 só começa depois de usar as Fases 1 e 2 no dia a dia.
 8. Plataformas: **Windows e Linux por igual, desde a Fase 1**. Distribuição: `.exe` assinado (NSIS) + `.deb`/`.tar.gz`.
-9. Janela: **Wails v2** (decisão do dono do projeto), com tela cheia nativa (F11, duplo clique ou botão) e tela de conexão USB/Wi-Fi como primeira tela (seção 2.4). O navegador fica só como modo `--browser` de diagnóstico.
+9. Janela: **Wails v2** (decisão do dono do projeto), com tela cheia nativa (F11 ou botão) e tela de conexão USB/Wi-Fi como primeira tela (seção 2.4).
