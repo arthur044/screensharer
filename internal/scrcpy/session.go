@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/arthur044/screensharer/internal/adb"
@@ -50,7 +51,11 @@ type Session struct {
 	events chan media.Event
 	done   chan struct{}
 
-	mu       sync.Mutex
+	// videoStarted fica verdadeiro na primeira sessão de vídeo. Antes disso a
+	// captura ainda não existe no servidor, e um RESET_VIDEO o derruba.
+	videoStarted atomic.Bool
+
+	mu      sync.Mutex
 	err      error
 	closed   bool
 	clipSeq  uint64
@@ -181,6 +186,9 @@ func Start(ctx context.Context, client *adb.Client, serial, serverPath string, o
 func (s *Session) readLoop() {
 	defer close(s.events)
 	err := readVideo(s.video, func(e media.Event) bool {
+		if e.Session != nil {
+			s.videoStarted.Store(true)
+		}
 		select {
 		case s.events <- e:
 			return true
@@ -231,7 +239,13 @@ func (s *Session) Send(msg []byte) error {
 }
 
 // RequestKeyframe reinicia o encoder do celular para receber um keyframe já.
+// Antes do vídeo começar não faz nada: o primeiro pacote já é um keyframe, e o
+// scrcpy-server v5.0.1 morre (NullPointerException em Controller.resetVideo)
+// se o pedido chegar antes de a captura ser criada.
 func (s *Session) RequestKeyframe() {
+	if !s.videoStarted.Load() {
+		return
+	}
 	if err := s.Send(ResetVideo()); err != nil {
 		s.log.Debug("pedido de keyframe falhou", "err", err)
 	}
