@@ -63,6 +63,7 @@ Com `--debug`, o log (`~/.config/screensharer/screensharer.log` ou `%AppData%\sc
 - **Não pedir keyframe (`RESET_VIDEO`) antes de o vídeo começar:** o scrcpy-server v5.0.1 morre com `NullPointerException`. Quando o espelhamento cai, o motivo real costuma estar no celular: `adb logcat -d -s scrcpy:V AndroidRuntime:E`.
 - **WebKitGTK não acompanha a troca de resolução:** depois de uma rotação o decoder continua entregando o tamanho antigo, com a imagem espremida. Por isso `mirror.ts` recria o decoder a cada mensagem `config`.
 - **Hyprland:** o compositor marca toda janela como em mosaico, o GTK então ignora `WindowSetSize` e `WindowIsMaximised` devolve `true` sempre. O tamanho é pedido ao Hyprland pelo `hyprctl` (`internal/platform/hyprland.go`, sintaxe Lua do 0.5x): a janela fica flutuante durante o espelhamento e volta ao estado anterior no fim.
+- **Tela do PC apagando:** quem só assiste não mexe no mouse, e o serviço de inatividade do Omarchy (protetor aos 150 s, bloqueio aos 300 s) entrava no meio do vídeo. Ele respeita a inibição do Hyprland, então o app marca a própria janela durante o espelhamento (`platform.KeepAwake`): `set_prop` com `idle_inhibit` e valor **numérico** (`'1'` liga, `'0'` desliga; os nomes `always`/`none` devolvem `ok` e não fazem nada). Para conferir: campo `inhibitingIdle` do `hyprctl clients -j`.
 
 ## A verificar no PC real
 
@@ -74,6 +75,7 @@ Com `--debug`, o log (`~/.config/screensharer/screensharer.log` ou `%AppData%\sc
 6. **Latência:** filmar um cronômetro na tela do celular junto com o monitor (seção 7 do plano). Meta p50: ≤ 80 ms no USB e ≤ 130 ms no Wi-Fi 5 GHz.
 7. **Xiaomi:** o controle exige "Depuração USB (configurações de segurança)".
 8. **Outros ambientes Linux** (GNOME, KDE): o ajuste da janela só foi visto no Hyprland.
+9. **Tela do PC ligada durante o espelhamento:** no Windows o `SetThreadExecutionState` (`awake_windows.go`) só foi compilado, nunca rodou; no GNOME e no KDE ainda não há nada (`KeepAwake` só atende o Hyprland).
 
 ## Ajustes prováveis depois dos testes
 

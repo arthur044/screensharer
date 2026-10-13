@@ -265,6 +265,7 @@ func (a *App) attach(src media.Source, sess *scrcpy.Session) {
 	a.mu.Lock()
 	a.src, a.session = src, sess
 	a.mu.Unlock()
+	a.keepAwake(true)
 	a.stream.Attach(src, a.handleInput, func(err error) {
 		a.mu.Lock()
 		current := a.src == src
@@ -275,6 +276,7 @@ func (a *App) attach(src media.Source, sess *scrcpy.Session) {
 		src.Close()
 		if current {
 			a.restoreWindow()
+			a.keepAwake(false)
 			reason := ""
 			if err != nil {
 				reason = err.Error()
@@ -374,7 +376,16 @@ func (a *App) StopMirror() {
 		}
 		src.Close()
 		a.restoreWindow()
+		a.keepAwake(false)
 		wruntime.WindowSetTitle(a.ctx, "screensharer")
+	}
+}
+
+// keepAwake segura (on) ou solta (off) o protetor de tela e o bloqueio do PC
+// enquanto há espelhamento.
+func (a *App) keepAwake(on bool) {
+	if err := platform.KeepAwake(on); err != nil {
+		a.log.Warn("mantendo a tela do PC ligada", "err", err)
 	}
 }
 
