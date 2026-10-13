@@ -1,13 +1,19 @@
 package platform
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
+
+// Limite de cada chamada ao hyprctl: ela roda na goroutine que recebe o toque
+// e o teclado, que não pode ficar presa.
+const hyprTimeout = 2 * time.Second
 
 // O Hyprland diz a toda janela que ela está em mosaico, e com isso o GTK
 // ignora o pedido de tamanho do próprio app (gtk_window_resize). Quem muda o
@@ -118,7 +124,9 @@ func hyprDispatch(name, args string) error {
 		args += ", "
 	}
 	code := fmt.Sprintf("hl.dsp.window.%s({ %swindow = 'pid:%d' })", name, args, os.Getpid())
-	out, err := exec.Command("hyprctl", "dispatch", code).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), hyprTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "hyprctl", "dispatch", code).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("hyprctl %s: %w", name, err)
 	}
@@ -130,7 +138,9 @@ func hyprDispatch(name, args string) error {
 }
 
 func hyprJSON(v any, what string) error {
-	out, err := exec.Command("hyprctl", "-j", what).Output()
+	ctx, cancel := context.WithTimeout(context.Background(), hyprTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "hyprctl", "-j", what).Output()
 	if err != nil {
 		return fmt.Errorf("hyprctl %s: %w", what, err)
 	}

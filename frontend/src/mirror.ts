@@ -25,8 +25,10 @@ const DECODE_RETRY_MS = 200;
 // Durante o espelhamento a janela pode ficar mais estreita que o mínimo do
 // app: um celular em pé numa tela baixa não chega a MIN_SIDE de largura.
 const MIRROR_MIN_SIDE = 160;
-// Espera a janela sair da tela cheia antes de mexer no tamanho dela.
-const UNFULLSCREEN_MS = 200;
+// Espera a janela sair da tela cheia antes de mexer no tamanho dela: confere
+// a cada UNFULLSCREEN_MS, até UNFULLSCREEN_TRIES vezes.
+const UNFULLSCREEN_MS = 100;
+const UNFULLSCREEN_TRIES = 10;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Rótulo e dica do botão de preenchimento, que só existe com o celular deitado.
@@ -124,7 +126,10 @@ export class Mirror {
     clearTimeout(this.retryTimer);
     for (const off of this.listeners) off();
     this.listeners = [];
-    this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
+    // Zera o canvas (o que também o limpa): ele é o mesmo no próximo
+    // espelhamento, e é a mudança de tamanho dele que ajusta a janela.
+    this.canvas.width = 0;
+    this.canvas.height = 0;
     WindowSetMinSize(MIN_SIDE, MIN_SIDE);
     if (this.sizeBefore) {
       WindowSetSize(this.sizeBefore.w, this.sizeBefore.h);
@@ -456,7 +461,11 @@ export class Mirror {
   // O celular pode ter girado durante a tela cheia: ao sair, ajusta a janela de novo.
   private async leaveFullscreen() {
     WindowUnfullscreen();
-    await sleep(UNFULLSCREEN_MS);
+    // A saída não é imediata, e fitWindow desiste se ainda for tela cheia.
+    for (let i = 0; i < UNFULLSCREEN_TRIES; i++) {
+      await sleep(UNFULLSCREEN_MS);
+      if (this.ended || !(await WindowIsFullscreen())) break;
+    }
     if (!this.ended && this.videoW) void this.fitWindow({ w: this.videoW, h: this.videoH });
   }
 

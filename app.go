@@ -295,11 +295,11 @@ func (a *App) handleInput(in media.Input) {
 	}
 	var err error
 	if in.T == "log" {
-		a.log.Debug("interface", "stats", in.S)
+		a.log.Debug("interface", "texto", in.S)
 		return
 	}
 	if in.T == "window" {
-		a.fitWindow(in.W, in.H)
+		a.fitWindow(src, in.W, in.H)
 		return
 	}
 	if in.T == "paste" {
@@ -322,7 +322,7 @@ func (a *App) handleInput(in media.Input) {
 
 // fitWindow atende o pedido da interface de dar à janela o tamanho do vídeo.
 // Só o Hyprland precisa: nos outros sistemas a própria interface redimensiona.
-func (a *App) fitWindow(w, h int) {
+func (a *App) fitWindow(src media.Source, w, h int) {
 	if !platform.OnHyprland() || w <= 0 || h <= 0 {
 		return
 	}
@@ -334,10 +334,18 @@ func (a *App) fitWindow(w, h int) {
 		return
 	}
 	a.mu.Lock()
-	if a.winBefore == nil {
+	current := a.src == src
+	if current && a.winBefore == nil {
 		a.winBefore = &before
 	}
 	a.mu.Unlock()
+	// O espelhamento acabou enquanto o hyprctl rodava: restoreWindow já passou
+	// sem ter o que desfazer, então desfaz aqui.
+	if !current {
+		if err := platform.HyprlandRestore(before); err != nil {
+			a.log.Warn("restauração da janela", "err", err)
+		}
+	}
 }
 
 // restoreWindow desfaz o fitWindow quando o espelhamento termina.
