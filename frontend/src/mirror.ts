@@ -5,8 +5,15 @@ import {
   WindowCenter, WindowFullscreen, WindowGetPosition, WindowGetSize, WindowIsFullscreen,
   WindowIsMaximised, WindowSetMinSize, WindowSetSize, WindowUnfullscreen,
 } from '../wailsjs/runtime/runtime';
+import { audioHelp, AudioPlayer } from './audio';
 import { FIT_MODES, FitMode, fitSize, MIN_SIDE, Size, toVideoPoint } from './fit';
 import { AKEY, androidKeycode, androidMeta } from './keymap';
+
+// Tempo que um aviso fica por cima do vídeo.
+const NOTICE_MS = 12000;
+
+// Primeiro byte das mensagens binárias (internal/stream/stream.go).
+const FRAME_VIDEO = 1, FRAME_AUDIO = 2;
 
 // Ações e botões do Android.
 const DOWN = 0, UP = 1, MOVE = 2;
@@ -50,6 +57,8 @@ export interface MirrorOptions {
   url: string;
   deviceName: string;
   control: boolean;
+  audio: boolean;
+  os: string;
   debug: boolean;
   onEnd: (reason: string) => void;
 }
@@ -57,6 +66,7 @@ export interface MirrorOptions {
 export class Mirror {
   private ws: WebSocket | null = null;
   private decoder: VideoDecoder | null = null;
+  private audio: AudioPlayer | null = null;
   private codec = '';
   private needKey = true;
   private configuredAt = 0;
@@ -81,6 +91,8 @@ export class Mirror {
   private statsTimer = 0;
   private hideTimer = 0;
   private retryTimer = 0;
+  private noticeTimer = 0;
+  private noticeText = '';
   private lastStats = '';
   private statsOn = false; // pedido pelo usuário (ou por --debug)
   private ticks = 0;
@@ -107,9 +119,16 @@ export class Mirror {
     WindowSetMinSize(MIRROR_MIN_SIDE, MIRROR_MIN_SIDE);
     const ws = new WebSocket(this.opt.url);
     ws.binaryType = 'arraybuffer';
-    ws.onmessage = (m) => (typeof m.data === 'string' ? this.onText(m.data) : this.onVideo(m.data));
+    ws.onmessage = (m) => (typeof m.data === 'string' ? this.onText(m.data) : this.onBinary(m.data));
     ws.onclose = () => this.end('');
     this.ws = ws;
+    if (this.opt.audio) {
+      const log = (text: string) => { if (this.opt.debug) this.send({ t: 'log', s: text }); };
+      AudioPlayer.create(log, () => this.notice(audioHelp(this.opt.os))).then((player) => {
+        if (this.ended) player.close();
+        else this.audio = player;
+      }).catch((e) => log('áudio: falhou ao iniciar: ' + String(e)));
+    }
     this.bindInput();
     this.statsTimer = window.setInterval(() => this.tickStats(), 1000);
     this.showToolbar();
@@ -121,9 +140,13 @@ export class Mirror {
     this.ws = null;
     try { this.decoder?.close(); } catch { /* já fechado */ }
     this.decoder = null;
+    this.audio?.close();
+    this.audio = null;
     clearInterval(this.statsTimer);
     clearTimeout(this.hideTimer);
     clearTimeout(this.retryTimer);
+    clearTimeout(this.noticeTimer);
+    this.status.classList.remove('notice');
     for (const off of this.listeners) off();
     this.listeners = [];
     // Zera o canvas (o que também o limpa): ele é o mesmo no próximo
@@ -141,6 +164,21 @@ export class Mirror {
     if (this.ended) return;
     this.stop();
     this.opt.onEnd(reason);
+  }
+
+  // Aviso temporário por cima do vídeo.
+  private notice(text: string) {
+    this.noticeText = text;
+    this.status.classList.add('notice');
+    this.setStatus(text);
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => this.clearNotice(), NOTICE_MS);
+  }
+
+  private clearNotice() {
+    this.status.classList.remove('notice');
+    if (this.status.textContent === this.noticeText && this.frames > 0) this.setStatus('');
+    this.noticeText = '';
   }
 
   private setStatus(text: string) {
@@ -204,9 +242,14 @@ export class Mirror {
     this.needKey = true;
   }
 
-  private onVideo(buf: ArrayBuffer) {
+  private onBinary(buf: ArrayBuffer) {
     const b = new Uint8Array(buf);
-    if (b[0] !== 1 || !this.decoder || this.decoder.state !== 'configured') return;
+    if (b[0] === FRAME_VIDEO) this.onVideo(buf, b);
+    else if (b[0] === FRAME_AUDIO) this.audio?.push(b.subarray(9)); // tipo + PTS
+  }
+
+  private onVideo(buf: ArrayBuffer, b: Uint8Array) {
+    if (!this.decoder || this.decoder.state !== 'configured') return;
     const key = (b[1] & 1) === 1;
     this.bytes += b.length;
     if (this.needKey && !key) return;
@@ -246,7 +289,7 @@ export class Mirror {
     }
     this.ctx.drawImage(frame, 0, 0);
     frame.close();
-    if (this.frames === 0) this.setStatus('');
+    if (this.frames === 0 && !this.noticeText) this.setStatus('');
     this.frames++;
     this.decodeErrors = 0;
   }
@@ -296,7 +339,8 @@ export class Mirror {
     this.lastStats =
       `${this.videoW}×${this.videoH}  ${this.codec}\n` +
       `${fps} fps  ${kbps} kbps  decodificação ${dec} ms\n` +
-      `fila ${this.decoder?.decodeQueueSize ?? 0}  descartados ${this.droppedLocal} local / ${this.droppedServer} servidor`;
+      `fila ${this.decoder?.decodeQueueSize ?? 0}  descartados ${this.droppedLocal} local / ${this.droppedServer} servidor` +
+      (this.audio ? '\n' + this.audio.stats() : '');
     if (!this.statsEl.hidden) this.statsEl.textContent = this.lastStats;
     // Em --debug, as estatísticas vão para o log do Go (screensharer.log).
     if (this.opt.debug && ++this.ticks % 5 === 0) this.send({ t: 'log', s: this.lastStats.replace(/\n/g, ' | ') });
@@ -376,6 +420,10 @@ export class Mirror {
         this.send({ t: 'scroll', ...this.toVideo(e), hs: -e.deltaX / unit, vs: -e.deltaY / unit });
       }, { passive: false });
     }
+
+    // A webview pode segurar o som até o primeiro gesto do usuário.
+    this.on(window, 'pointerdown', () => this.audio?.resume(), { capture: true });
+    this.on(window, 'keydown', () => this.audio?.resume(), { capture: true });
 
     this.on(window, 'keydown', (e: KeyboardEvent) => this.onKey(e, DOWN));
     this.on(window, 'keyup', (e: KeyboardEvent) => this.onKey(e, UP));

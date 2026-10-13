@@ -102,6 +102,37 @@ func TestReadDeviceMessages(t *testing.T) {
 	}
 }
 
+func TestReadAudio(t *testing.T) {
+	pcm := []byte{1, 0, 2, 0, 3, 0, 4, 0} // dois frames estéreo de 16 bits
+	var f fakeVideo
+	f.u32(codecRaw)
+	f.packet(flagConfig, []byte{9, 9, 9, 9}) // PCM não tem configuração: ignorado
+	f.packet(21333, pcm)
+	f.packet(42666, []byte{1, 2, 3}) // bloco quebrado: ignorado
+
+	var got []*media.Audio
+	err := readAudio(&f, func(a *media.Audio) bool { got = append(got, a); return true })
+	if err != io.EOF {
+		t.Fatalf("err = %v, esperava EOF", err)
+	}
+	if len(got) != 1 || got[0].PTS != 21333 || !bytes.Equal(got[0].Data, pcm) {
+		t.Fatalf("áudio inesperado: %+v", got)
+	}
+}
+
+func TestReadAudioDisabled(t *testing.T) {
+	var f fakeVideo
+	f.u32(0)
+	if err := readAudio(&f, func(*media.Audio) bool { return true }); err != errAudioDisabled {
+		t.Fatalf("err = %v, esperava errAudioDisabled", err)
+	}
+	f.Reset()
+	f.u32(codecH264)
+	if err := readAudio(&f, func(*media.Audio) bool { return true }); err == nil {
+		t.Fatal("codec de vídeo no socket de áudio deveria dar erro")
+	}
+}
+
 func FuzzReadVideo(f *testing.F) {
 	var v fakeVideo
 	v.u32(codecH264)

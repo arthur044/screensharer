@@ -53,7 +53,7 @@ O núcleo é o mesmo nos dois sistemas: o adb existe para ambos, o Go compila pa
 | adb | Embutir o `platform-tools` oficial para Windows | Embutir o `platform-tools` para Linux, ou usar o da distro |
 | USB | Às vezes precisa do **driver USB do fabricante** (Samsung, Xiaomi). Google USB Driver para Pixel | Precisa de **regras udev** (`51-android.rules` ou o pacote `android-sdk-platform-tools-common`), senão o aparelho aparece como `no permissions` |
 | Decodificação (WebCodecs) | WebView2: **por hardware** (D3D11), CPU < 5 % | WebKitGTK → GStreamer. **Exige um decodificador H.264 do GStreamer**: `gstreamer1.0-libav` (ou `openh264`/`vaapi`). Sem ele, `isConfigSupported` diz `true` e **a decodificação falha** (testado). Em software: ~6–7 ms por frame em 720p |
-| Runtime da janela | **WebView2 Runtime**: já vem no Windows 10 e 11 atualizados; o instalador do Wails baixa se faltar | `libwebkit2gtk-4.1-0` + GStreamer: dependências do pacote `.deb` e verificadas na inicialização |
+| Runtime da janela | **WebView2 Runtime**: já vem no Windows 10 e 11 atualizados; o instalador do Wails baixa se faltar | `libwebkit2gtk-4.1-0` + GStreamer (`gstreamer1.0-libav` para o vídeo, `gstreamer1.0-plugins-good` para o som): dependências do pacote `.deb`; o vídeo é verificado na inicialização e o som, ao começar a tocar |
 | Build | **Sem cgo**: compilado direto do Linux (`GOOS=windows`), testado | Com cgo: precisa de `libwebkit2gtk-4.1-dev` + `libgtk-3-dev`, build com a tag `webkit2_41` |
 | Firewall (Fase 3) | Firewall do Windows pede permissão para a porta | Em geral liberado; `ufw` e `firewalld` exigem uma regra |
 | Distribuição | `.exe` assinado (instalador NSIS do Wails ou zip portátil) | **`.deb`** (declara webkit2gtk, gstreamer1.0-libav e udev como dependências) + `.tar.gz`. AppImage não: empacotar WebKitGTK e GStreamer juntos é frágil |
@@ -100,7 +100,7 @@ O backend aqui só faz entrada e saída: chama o `adb`, lê um socket, quebra o 
      - Botão **"Ativar Wi-Fi para este aparelho"**: com o celular no USB, liga a depuração sem fio sem precisar digitar código. Caminho: `adb shell settings put global adb_wifi_enabled 1`, ler o IP e a porta, depois `adb connect`. **Testado no Galaxy A71 com Android 13: não dispensa.** A chave autorizada pelo USB não vale para o TLS, então o botão cai para o formulário de pareamento e, depois de parear, o app conecta sozinho. Nesse aparelho o shell não lê `service.adb.tls.port`; a porta vem do anúncio mDNS. `adb tcpip 5555` continua proibido (R7).
      - Formulário **Parear** (IP:porta + código de 6 dígitos → `adb pair`).
      - Lista **"Encontrados na rede"** (`adb mdns services`) com o botão **Conectar**.
-  3. Configurações: resolução máxima, FPS, bitrate, ligar ou desligar o controle e manter a tela ligada. O áudio ainda não existe (Fase 4).
+  3. Configurações: resolução máxima, FPS, bitrate, ligar ou desligar o controle, manter a tela ligada e tocar o som do celular no PC.
 - **Na janela do vídeo:** barra discreta (que some depois de 2 s) com voltar, início, recentes, volume, liga/desliga, rotação, notificações, estatísticas (`Ctrl+Shift+D`), preenchimento (só com o celular deitado), tela cheia e desconectar. A qualidade fica na tela de conexão.
 
 ### 2.5 Viabilidade do Go + Wails: verificada na prática
@@ -209,7 +209,7 @@ O desenho acima era o do plano. A interface implementada é a `media.Source` de 
 
 ## 4. Fases definitivas
 
-> **Estado (12/10/2026):** a Fase 1 está implementada e o Wi-Fi via ADB (Fase 2) já tem interface. Já rodou com celular de verdade (Galaxy A71, Android 13) no Windows e no Linux: USB, rotação, tela cheia e pareamento e conexão pelo Wi-Fi funcionam. O que falta testar está na lista do `CLAUDE.md`. Ainda não feito: reconexão automática, latência medida, taxa adaptativa, áudio, pacote `.deb` e instalador NSIS assinado.
+> **Estado (12/10/2026):** a Fase 1 está implementada e o Wi-Fi via ADB (Fase 2) já tem interface. Já rodou com celular de verdade (Galaxy A71, Android 13) no Windows e no Linux: USB, rotação, tela cheia e pareamento e conexão pelo Wi-Fi funcionam. O que falta testar está na lista do `CLAUDE.md`. Ainda não feito: reconexão automática, latência medida, taxa adaptativa, pacote `.deb` e instalador NSIS assinado.
 
 ### Fase 0: Spike do pipeline (1 a 2 dias)
 - `adb exec-out screenrecord --output-format=h264 --bit-rate 8M --size 1280x720 -` → backend → WebSocket → WebCodecs.
@@ -240,7 +240,7 @@ O desenho acima era o do plano. A interface implementada é a `media.Source` de 
 ### Fase 4: Extras (cada um entra de forma independente)
 | Extra | Modo ADB | App próprio | Custo |
 |---|---|---|---|
-| Áudio interno (Android 11+) | `scrcpy-server` já captura (Opus) | `AudioPlaybackCapture` (apps podem bloquear) | Baixo / médio |
+| Áudio interno (Android 11+) | **Feito** com `audio_codec=raw` (PCM, ~1,5 Mbps): não depende de decodificador de áudio na webview. Opus fica como opção para Wi-Fi fraco | `AudioPlaybackCapture` (apps podem bloquear) | Baixo / médio |
 | Gravação | Remux do H.264 para MP4 **sem recodificar**, com CPU quase zero | Igual | Baixo |
 | Qualidade e FPS na UI | Parâmetros do servidor | Parâmetros do MediaCodec | Baixo |
 | Vários aparelhos ao mesmo tempo | Uma `Source` por serial | Igual | Médio |

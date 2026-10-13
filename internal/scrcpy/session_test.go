@@ -58,6 +58,12 @@ func TestSessionWithFakeDevice(t *testing.T) {
 		}
 		defer video.Close()
 		video.Write([]byte{0})
+		// A ordem das conexões é vídeo, áudio, controle.
+		audio, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer audio.Close()
 		ctrl, err := ln.Accept()
 		if err != nil {
 			return
@@ -74,6 +80,11 @@ func TestSessionWithFakeDevice(t *testing.T) {
 		f.packet(flagKeyFrame|5, testIDR)
 		video.Write(f.Bytes())
 
+		var a fakeVideo
+		a.u32(codecRaw)
+		a.packet(1000, []byte{1, 0, 2, 0})
+		audio.Write(a.Bytes())
+
 		ctrl.Write([]byte{deviceMsgClipboard, 0, 0, 0, 2, 'o', 'i'})
 		buf := make([]byte, 14)
 		io.ReadFull(ctrl, buf)
@@ -84,7 +95,7 @@ func TestSessionWithFakeDevice(t *testing.T) {
 	clip := make(chan string, 1)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	s, err := Start(ctx, &adb.Client{Path: fakeADB}, "SERIAL", srv, Options{Control: true, OnClipboard: func(t string) { clip <- t }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	s, err := Start(ctx, &adb.Client{Path: fakeADB}, "SERIAL", srv, Options{Control: true, Audio: true, OnClipboard: func(t string) { clip <- t }}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,15 +104,24 @@ func TestSessionWithFakeDevice(t *testing.T) {
 	if s.DeviceName != "Pixel Teste" {
 		t.Fatalf("nome = %q", s.DeviceName)
 	}
+	// O áudio vem de outro socket: chega em qualquer ponto entre os eventos de vídeo.
 	var evs []media.Event
+	var audio *media.Audio
 	for e := range s.Events() {
-		evs = append(evs, e)
-		if len(evs) == 3 {
+		if e.Audio != nil {
+			audio = e.Audio
+		} else {
+			evs = append(evs, e)
+		}
+		if len(evs) == 3 && audio != nil {
 			break
 		}
 	}
 	if evs[0].Session == nil || evs[1].Config == nil || evs[2].Packet == nil || !evs[2].Packet.Key {
 		t.Fatalf("eventos inesperados: %+v", evs)
+	}
+	if audio.PTS != 1000 || !bytes.Equal(audio.Data, []byte{1, 0, 2, 0}) {
+		t.Fatalf("áudio inesperado: %+v", audio)
 	}
 	select {
 	case got := <-clip:

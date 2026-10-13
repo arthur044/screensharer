@@ -1,6 +1,6 @@
 # screensharer
 
-Espelha a tela de um celular Android no PC (Windows e Linux), pelo USB ou pelo Wi-Fi, com controle por mouse e teclado. Usa o [`scrcpy-server`](https://github.com/Genymobile/scrcpy) (Apache-2.0) no celular, Go + [Wails](https://wails.io) no PC e WebCodecs para decodificar o vídeo.
+Espelha a tela de um celular Android no PC (Windows e Linux), pelo USB ou pelo Wi-Fi, com controle por mouse e teclado e com o som do celular tocando no PC. Usa o [`scrcpy-server`](https://github.com/Genymobile/scrcpy) (Apache-2.0) no celular, Go + [Wails](https://wails.io) no PC e WebCodecs para decodificar o vídeo.
 
 O plano completo (decisões, riscos, custos e fases) está em [docs/PLANO.md](docs/PLANO.md).
 
@@ -8,7 +8,7 @@ O plano completo (decisões, riscos, custos e fases) está em [docs/PLANO.md](do
 
 | | Windows | Linux |
 |---|---|---|
-| Rodar | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (já vem no Windows 10/11 atualizado) | `libwebkit2gtk-4.1-0`, `libgtk-3-0` e **`gstreamer1.0-libav`** (decodificador H.264; no Arch, `gst-libav`) |
+| Rodar | [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) (já vem no Windows 10/11 atualizado) | `libwebkit2gtk-4.1-0`, `libgtk-3-0` **`gstreamer1.0-libav`** (decodificador H.264; no Arch, `gst-libav`) e **`gstreamer1.0-plugins-good`** (saída de som; no Arch, `gst-plugins-good`) |
 | adb | [Android platform-tools](https://developer.android.com/tools/releases/platform-tools) no PATH, ou `--adb CAMINHO` | `sudo apt install adb` (já traz as regras udev) |
 | Desenvolver | Go 1.25+, Node 20+ (22.18+ para os testes do frontend), CLI do Wails | igual, mais `libgtk-3-dev` e `libwebkit2gtk-4.1-dev` |
 
@@ -67,6 +67,8 @@ Na janela do vídeo:
 | Estatísticas | Ctrl+Shift+D ou o botão ⓘ (só aparecem com o celular em pé) |
 
 A barra de botões aparece quando o mouse chega ao topo da janela. Se o controle estiver desligado, o duplo clique também alterna a tela cheia.
+
+O som do celular toca no PC (Android 11+) e o celular fica mudo enquanto isso. Dá para desligar em **Qualidade → Tocar o som do celular no PC**. Se a webview segurar o som no início, um clique na janela libera.
 
 A janela assume a proporção do celular ao começar e a cada rotação, para não sobrar faixa preta, e volta ao tamanho anterior ao desconectar. Em tela cheia ou maximizada a proporção não bate; com o celular deitado, um botão na barra escolhe o que fazer: **Preencher** (corta as sobras), **Inteira** (com faixas) ou **Esticar**. Com o celular em pé a imagem aparece sempre inteira.
 
