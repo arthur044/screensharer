@@ -10,19 +10,19 @@ App desktop (Windows e Linux) que espelha um Android no PC, pelo USB ou Wi-Fi vi
 celular: scrcpy-server v5.0.1 (enviado pelo adb)
    │  adb forward tcp:N → localabstract:scrcpy_<scid>
    ▼
-Go (internal/scrcpy) ── media.Event ──▶ internal/stream (WebSocket 127.0.0.1, token) ──▶ frontend: WebCodecs → <canvas>
+Go (internal/scrcpy) ── media.Event ──▶ internal/stream (WebSocket 127.0.0.1, token) ──▶ frontend: WebCodecs → <canvas>, Web Audio
    ▲                                                                                          │
    └──────────── mensagens de controle ◀──── JSON media.Input ◀───────────────────────────────┘
 ```
 
 - `main.go`, `app.go`: app Wails. Os métodos públicos de `App` são os bindings chamados pela interface.
 - `internal/adb`: chamadas ao executável adb (devices, pair, connect, mdns, forward, Wi-Fi).
-- `internal/scrcpy`: protocolo do scrcpy-server. `control.go` monta as mensagens PC→celular, `demux.go` lê o vídeo e as mensagens celular→PC, `session.go` sobe o servidor e conecta, `server.go` acha ou baixa o jar (SHA-256 fixado).
+- `internal/scrcpy`: protocolo do scrcpy-server. `control.go` monta as mensagens PC→celular, `demux.go` lê o vídeo, o áudio e as mensagens celular→PC, `session.go` sobe o servidor e conecta, `server.go` acha ou baixa o jar (SHA-256 fixado).
 - `internal/stream`: WebSocket local. Descarta frames até o próximo keyframe quando o cliente atrasa.
 - `internal/demo`: fonte de teste com ffmpeg (`testsrc2`), sem celular.
 - `internal/media`: tipos comuns (`Source`, `Event`, `Input`) e utilitários de H.264.
 - `internal/platform`: o que muda por sistema (achar o adb, pasta de dados, esconder o console no Windows) e o ajuste da janela no Hyprland (`hyprland.go`).
-- `frontend/src/main.ts`: tela de conexão. `mirror.ts`: vídeo, entrada, janela e estatísticas. `fit.ts`: contas puras do tamanho da janela e das coordenadas do toque (testadas em `frontend/test`). `keymap.ts`: teclas → keycodes Android. `selftest.ts`: decodifica um frame embutido na inicialização.
+- `frontend/src/main.ts`: tela de conexão. `mirror.ts`: vídeo, entrada, janela e estatísticas. `audio.ts`: toca o som do celular (PCM de 48 kHz estéreo, sem compressão) com um AudioWorklet e uma fila de 60 ms. `fit.ts`: contas puras do tamanho da janela e das coordenadas do toque (testadas em `frontend/test`). `keymap.ts`: teclas → keycodes Android. `selftest.ts`: decodifica um frame embutido na inicialização.
 - `frontend/wailsjs/`: gerado pelo Wails (`wails generate module`). Não editar à mão; é regenerado em `wails dev`/`wails build` quando a assinatura de um método de `App` muda.
 
 ## Comandos
@@ -62,18 +62,20 @@ Com `--debug`, o log (`~/.config/screensharer/screensharer.log` ou `%AppData%\sc
 - **"Ativar Wi-Fi" pede pareamento** no A71 com Android 13: a autorização do USB não vale para o Wi-Fi. O shell também não lê `service.adb.tls.port`; a porta vem do anúncio mDNS.
 - **Não pedir keyframe (`RESET_VIDEO`) antes de o vídeo começar:** o scrcpy-server v5.0.1 morre com `NullPointerException`. Quando o espelhamento cai, o motivo real costuma estar no celular: `adb logcat -d -s scrcpy:V AndroidRuntime:E`.
 - **WebKitGTK não acompanha a troca de resolução:** depois de uma rotação o decoder continua entregando o tamanho antigo, com a imagem espremida. Por isso `mirror.ts` recria o decoder a cada mensagem `config`.
+- **Som no Linux:** o Web Audio do WebKitGTK precisa do `autoaudiosink`, do `gst-plugins-good`. Sem ele o AudioContext fica suspenso e `resume()` falha com "Failed to start the audio device"; o app mostra o pacote a instalar.
 - **Hyprland:** o compositor marca toda janela como em mosaico, o GTK então ignora `WindowSetSize` e `WindowIsMaximised` devolve `true` sempre. O tamanho é pedido ao Hyprland pelo `hyprctl` (`internal/platform/hyprland.go`, sintaxe Lua do 0.5x): a janela fica flutuante durante o espelhamento e volta ao estado anterior no fim.
 
 ## A verificar no PC real
 
 1. **Windows com a janela nova (PR #2):** o ajuste da janela veio de código validado lá, mas o botão de preenchimento, a barra que quebra em linhas e a recriação do decoder a cada `config` ainda não rodaram no Windows. Conferir descartes e atraso: cada pedido de keyframe agora recria o decoder.
-2. **Controle, item por item:** toque, arrasto, rolagem, texto com acentos (ç, á), Enter/Backspace/setas, botões da barra, botão direito = voltar, Ctrl+V cola o texto do PC, Ctrl+C traz a seleção do celular.
-3. **Janela:** parar e espelhar de novo o mesmo aparelho (a janela deve se ajustar outra vez); girar o celular em tela cheia e sair dela; no Hyprland, a janela deve voltar ao mosaico ao desconectar.
-4. **Fonte de teste** com ffmpeg no Windows (~60 fps).
-5. **Wi-Fi:** desempenho (fps, descartes) e desligar e ligar a tela do celular.
-6. **Latência:** filmar um cronômetro na tela do celular junto com o monitor (seção 7 do plano). Meta p50: ≤ 80 ms no USB e ≤ 130 ms no Wi-Fi 5 GHz.
-7. **Xiaomi:** o controle exige "Depuração USB (configurações de segurança)".
-8. **Outros ambientes Linux** (GNOME, KDE): o ajuste da janela só foi visto no Hyprland.
+2. **Som (branch `audio-no-pc`):** no Linux com o A71 os blocos chegam e a fila fica em 45–60 ms sem falhas, mas falta conferir de ouvido a sincronia com o vídeo, o atraso, o Wi-Fi e o Windows (o WebView2 pode exigir um clique antes de tocar).
+3. **Controle, item por item:** toque, arrasto, rolagem, texto com acentos (ç, á), Enter/Backspace/setas, botões da barra, botão direito = voltar, Ctrl+V cola o texto do PC, Ctrl+C traz a seleção do celular.
+4. **Janela:** parar e espelhar de novo o mesmo aparelho (a janela deve se ajustar outra vez); girar o celular em tela cheia e sair dela; no Hyprland, a janela deve voltar ao mosaico ao desconectar.
+5. **Fonte de teste** com ffmpeg no Windows (~60 fps).
+6. **Wi-Fi:** desempenho (fps, descartes) e desligar e ligar a tela do celular.
+7. **Latência:** filmar um cronômetro na tela do celular junto com o monitor (seção 7 do plano). Meta p50: ≤ 80 ms no USB e ≤ 130 ms no Wi-Fi 5 GHz.
+8. **Xiaomi:** o controle exige "Depuração USB (configurações de segurança)".
+9. **Outros ambientes Linux** (GNOME, KDE): o ajuste da janela só foi visto no Hyprland.
 
 ## Ajustes prováveis depois dos testes
 
