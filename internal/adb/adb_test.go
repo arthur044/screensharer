@@ -43,3 +43,25 @@ func TestParseMDNS(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+func TestFindConnectAddr(t *testing.T) {
+	svcs := []MDNSService{
+		{Name: "adb-OUTRO-abc123", Type: "connect", Address: "192.168.18.50:40001"},
+		{Name: "adb-RQ8N80AH48V-RlL3hs", Type: "pairing", Address: "192.168.18.101:37001"},
+		{Name: "adb-RQ8N80AH48V-RlL3hs", Type: "connect", Address: "192.168.18.101:43395"},
+	}
+	// Pelo IP do aparelho, ignorando o serviço de pareamento e os outros aparelhos.
+	if got, ok := findConnectAddr(svcs, "RQ8N80AH48V", "192.168.18.101"); !ok || got != "192.168.18.101:43395" {
+		t.Errorf("por IP = %q, %v", got, ok)
+	}
+	// Pelo serial no nome, quando o IP anunciado é outro (ex.: IPv6 ou outra interface).
+	if got, ok := findConnectAddr(svcs, "RQ8N80AH48V", "10.0.0.9"); !ok || got != "192.168.18.101:43395" {
+		t.Errorf("por serial = %q, %v", got, ok)
+	}
+	if got, ok := findConnectAddr(svcs, "NENHUM", "10.0.0.9"); ok {
+		t.Errorf("sem correspondência devolveu %q", got)
+	}
+	if _, ok := findConnectAddr(nil, "RQ8N80AH48V", "192.168.18.101"); ok {
+		t.Error("lista vazia devolveu true")
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
 	"regexp"
 	"strconv"
@@ -199,6 +200,24 @@ func ParseMDNS(out string) []MDNSService {
 	return svcs
 }
 
+// findConnectAddr procura, entre os serviços mDNS, o endereço de conexão do
+// aparelho: primeiro pelo IP, depois pelo serial no nome ("adb-SERIAL-xxxx").
+func findConnectAddr(svcs []MDNSService, serial, ip string) (string, bool) {
+	byName := ""
+	for _, s := range svcs {
+		if s.Type != "connect" {
+			continue
+		}
+		if host, _, err := net.SplitHostPort(s.Address); err == nil && host == ip {
+			return s.Address, true
+		}
+		if byName == "" && strings.HasPrefix(s.Name, "adb-"+serial+"-") {
+			byName = s.Address
+		}
+	}
+	return byName, byName != ""
+}
+
 // Shell executa um comando curto no aparelho e devolve a saída sem espaços nas pontas.
 func (c *Client) Shell(serial string, args ...string) (string, error) {
 	out, err := c.runTimeout(15*time.Second, append([]string{"-s", serial, "shell"}, args...)...)
@@ -273,20 +292,22 @@ func (c *Client) EnableWiFi(serial string) (WiFiResult, error) {
 	if _, err := c.Shell(serial, "settings", "put", "global", "adb_wifi_enabled", "1"); err != nil {
 		return res, fmt.Errorf("não foi possível ligar a depuração sem fio: %w", err)
 	}
-	// A porta é aleatória e aparece alguns instantes depois de ligar.
-	var port string
-	for i := 0; i < 20; i++ {
-		p, _ := c.Shell(serial, "getprop", "service.adb.tls.port")
-		if p != "" && p != "0" {
-			port = p
-			break
+	// A porta é aleatória e aparece alguns instantes depois de ligar. Alguns
+	// aparelhos (Samsung com Android 13) não deixam o shell ler a propriedade
+	// service.adb.tls.port; neles a porta vem do anúncio mDNS.
+	for i := 0; i < 20 && res.Address == ""; i++ {
+		if i > 0 {
+			time.Sleep(250 * time.Millisecond)
 		}
-		time.Sleep(250 * time.Millisecond)
+		if p, _ := c.Shell(serial, "getprop", "service.adb.tls.port"); p != "" && p != "0" {
+			res.Address = res.IP + ":" + p
+		} else if svcs, err := c.MDNSServices(); err == nil {
+			res.Address, _ = findConnectAddr(svcs, serial, res.IP)
+		}
 	}
-	if port == "" {
+	if res.Address == "" {
 		return res, errors.New("a depuração sem fio não informou a porta; ative-a em Opções do desenvolvedor")
 	}
-	res.Address = res.IP + ":" + port
 	if err := c.Connect(res.Address); err != nil {
 		return res, fmt.Errorf("%w (%v)", ErrNeedsPairing, err)
 	}

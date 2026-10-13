@@ -139,6 +139,24 @@ async function enableWiFi(serial: string) {
   }
 }
 
+// Depois de parear, conecta sozinho: o endereço de conexão (a porta é outra)
+// vem do "Ativar Wi-Fi" ou do anúncio do celular na rede.
+async function connectAfterPair(pairAddr: string) {
+  const host = pairAddr.slice(0, pairAddr.lastIndexOf(':'));
+  const input = $<HTMLInputElement>('connect-addr');
+  let addr = input.value.trim();
+  if (!addr.startsWith(host + ':')) {
+    const svcs = (await run(() => DiscoverWiFi())) ?? [];
+    addr = svcs.find((s) => s.type === 'connect' && s.address.startsWith(host + ':'))?.address ?? '';
+  }
+  if (!addr) {
+    banner('Pareado, mas o celular ainda não apareceu na rede. Clique em Procurar para conectar.');
+    return;
+  }
+  input.value = addr;
+  await run(() => Connect(addr), `Pareado e conectado a ${addr}. Já pode tirar o cabo.`);
+}
+
 async function discover() {
   $('discover-status').textContent = 'Procurando…';
   const svcs = await run(() => DiscoverWiFi());
@@ -270,12 +288,10 @@ async function init() {
     e.preventDefault();
     const addr = $<HTMLInputElement>('pair-addr').value.trim();
     const code = $<HTMLInputElement>('pair-code').value.trim();
-    const ok = await run(() => Pair(addr, code).then(() => true),
-      'Pareado. Agora conecte pelo IP:porta da tela "Depuração sem fio", ou clique em Procurar.');
-    if (ok) {
-      $<HTMLInputElement>('pair-code').value = '';
-      discover();
-    }
+    const ok = await run(() => Pair(addr, code).then(() => true));
+    if (!ok) return;
+    $<HTMLInputElement>('pair-code').value = '';
+    await connectAfterPair(addr);
   });
   $('connect-form').addEventListener('submit', (e) => {
     e.preventDefault();
